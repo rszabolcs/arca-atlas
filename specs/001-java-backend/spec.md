@@ -7,6 +7,15 @@
 
 ## Clarifications
 
+### Session 2026-02-27
+
+- Q: Naming fix (no question, self-evident): The spec used `Activated` as the event name throughout; the contract emits `PackageActivated`. → A: Corrected to `PackageActivated` everywhere (spec.md, data-model.md, openapi.yaml). FR-026 expanded to all 13 contract events with cache-update rules.
+- Q: Data model completeness (no question, self-evident): `package_cache` lacked `last_check_in` and `paid_until` columns; `event_records` lacked `reason_flags` documentation for `PendingRelease`; state-transitions table was missing `CheckIn`, `Renewed`, `PackageRescued` rows. → A: `last_check_in` and `paid_until` added to `package_cache`; `raw_data` annotated for `PendingRelease`; state-transitions table completed; event type enum updated to 13 types.
+- Q: Naming fix (no question, self-evident): openapi.yaml operationId `prepareUpdateManifest` / summary `updateManifest()` did not match the contract function `updateManifestUri(bytes32,string)`. → A: Corrected to `prepareUpdateManifestUri` / `updateManifestUri()` so ABI encoding aligns with the on-chain function selector.
+- Q: Should the backend provide a `/tx/rescue` unsigned payload endpoint for the upgrade authority's `rescue()` call? → A: Yes — unauthenticated at the payload layer (same pattern as `/tx/renew`; the contract enforces `NotAuthorized()` on-chain). Added to FR-012 and `openapi.yaml`.
+- Q: How should the backend surface `pricePerSecond`/funding-enabled status so clients can gate `/tx/renew` and ETH-bearing `/tx/activate` flows? → A: Expose `fundingEnabled` on a new unauthenticated `GET /config` endpoint returning `{chainId, proxyAddress, fundingEnabled}`. `pricePerSecond` is a deployment constant; one endpoint serves all callers. Added as FR-010a.
+- Q: Should the package-status endpoint return all fields from the contract's `PackageView` struct, or only the current 7? → A: All fields — including `vetoCount`, `approvalCount`, `guardianQuorum`, `warnThreshold`, `inactivityThreshold`, `gracePeriodSeconds`, `lastCheckIn`, and `paidUntil`. These are all public on-chain data already fetched by the backend; omitting them forces clients to make a redundant `eth_call`. FR-008 and the `PackageStatus` schema updated.
+
 ### Session 2026-02-26
 
 - Q: How are notification targets registered and managed? → A: Dedicated authenticated API endpoints (per package, per event type), managed by the package owner or beneficiary; `NotificationTarget` persisted in the backend DB.
@@ -81,7 +90,7 @@ operation.
 
 1. **Given** an authenticated owner and a valid manifest reference, **When** the owner calls the
    activation endpoint, **Then** the service returns an unsigned transaction payload that correctly
-   encodes the `activate(...)` contract call; submitting it produces an `Activated` event on-chain.
+   encodes the `activate(...)` contract call; submitting it produces a `PackageActivated` event on-chain.
 
 2. **Given** an active package owned by the caller, **When** the owner calls check-in, **Then**
    the service returns an unsigned payload for `checkIn(...)`; submitting it resets the inactivity
@@ -244,7 +253,7 @@ blocking or delaying the recovery path.
 responsiveness but are not on the critical path. Both can be iterated after higher-priority
 stories are stable.
 
-**Independent Test**: Emit a sequence of `Activated`, `PendingRelease`, `Released`, and `Revoked`
+**Independent Test**: Emit a sequence of `PackageActivated`, `PendingRelease`, `Released`, and `Revoked`
 events on a testnet including a deliberate reorg (mine two competing blocks then resolve). Verify
 the indexed state after reorg resolution matches the canonical chain; verify no duplicate events
 appear. Query the paginated event feed filtered by owner address; verify results are correct and
@@ -252,7 +261,8 @@ complete.
 
 **Acceptance Scenarios**:
 
-1. **Given** the indexer is running, **When** an `Activated`, `ManifestUpdated`, `PendingRelease`,
+1. **Given** the indexer is running, **When** a `PackageActivated`, `ManifestUpdated`, `PendingRelease`,
+   `CheckIn`, `Renewed`, `GuardianStateReset`, `PackageRescued`,
    `Released`, `Revoked`, or guardian event is emitted on-chain and has reached the confirmation
    depth, **Then** the event is recorded in the local index within **≤ 15 seconds** (one indexer polling cycle).
 
@@ -316,6 +326,11 @@ complete.
 - What happens when a request supplies a `proxyAddress` or `chainId` that does not match the
   service's configured values? The service MUST reject with HTTP 400 and a message identifying
   the mismatch (e.g., `"proxyAddress does not match configured proxy"`).
+- What happens when a non-owner submits a `renew()` payload for a package where the owner-only
+  recovery+reset branch would trigger (pre-extension status was funding-lapse-only `PENDING_RELEASE`
+  and the extension would exit pending)? The contract enforces `NotOwner()` at execution time;
+  the backend does not restrict who may request the `renew` payload, but callers should be aware
+  that this branch requires the submitting wallet to be the package owner.
 
 ---
 
@@ -349,9 +364,11 @@ complete.
 
 **Package Discovery**
 
-- **FR-008**: The service MUST expose a package-status endpoint that returns: on-chain status,
-  owner address, guardian list, beneficiary address, manifest URI, pending-since timestamp, and
-  released-at timestamp.
+- **FR-008**: The service MUST expose a package-status endpoint that returns all fields from
+  the contract's `PackageView` struct: on-chain status (from `getPackageStatus()`), owner
+  address, beneficiary address, manifest URI, guardian list, guardian quorum, veto count,
+  approval count, warn threshold, inactivity threshold, grace period (seconds), last check-in
+  timestamp, paid-until timestamp, pending-since timestamp, and released-at timestamp.
 - **FR-009**: The service MUST return status `DRAFT` for any `packageKey` that has no on-chain
   activation record; `DRAFT` is a valid response, not an error.
 - **FR-009a**: The service MUST surface `WARNING` and `CLAIMABLE` as distinct, first-class status
@@ -360,6 +377,12 @@ complete.
   statuses (e.g., treating `WARNING` as `ACTIVE`, or treating `CLAIMABLE` as `PENDING_RELEASE`).
 - **FR-010**: The service MUST support an unauthenticated read of package status for the
   recovery-kit path (the recovery kit endpoint must not require authentication).
+- **FR-010a**: The service MUST expose an unauthenticated `GET /config` endpoint that returns
+  `{chainId, proxyAddress, fundingEnabled}`. `fundingEnabled` MUST be `true` when the
+  configured instance has `pricePerSecond != 0`, and `false` otherwise. Clients MUST use this
+  endpoint to gate UI flows for `/tx/renew` and ETH-bearing `/tx/activate` requests; a
+  `fundingEnabled: false` instance MUST NOT allow these flows to proceed to calldata generation
+  (doing so would produce calldata that reverts with `FundingDisabled()` on-chain).
 
 **Owner Transaction Payloads**
 
@@ -367,7 +390,10 @@ complete.
   an unsigned `activate(...)` transaction payload (calldata + target address + gas estimate).
 - **FR-012**: The service MUST provide endpoints that return unsigned payloads for `checkIn(...)`,
   `renew(...)`, `guardianApprove(...)`, `guardianVeto(...)`, `guardianRescindVeto(...)`,
-  `guardianRescindApprove(...)`, `claim(...)`, and `revoke(...)` contract calls.
+  `guardianRescindApprove(...)`, `claim(...)`, `revoke(...)`, and `rescue(...)` contract calls.
+- **FR-012c**: The `rescue` payload endpoint is **unauthenticated** at the backend level; the
+  contract enforces `NotAuthorized()` if the caller is not the stored upgrade authority. The
+  backend only encodes `rescue(packageKey)` calldata; access control is fully on-chain.
 - **FR-012a**: The `checkIn` payload endpoint MUST perform a live chain status read before
   returning a payload; if the package status is `CLAIMABLE`, the endpoint MUST return HTTP 409
   with a clear error message rather than a payload that will revert on-chain with
@@ -433,9 +459,14 @@ complete.
 
 **Event Indexing**
 
-- **FR-026**: The service MUST index the following on-chain events: `Activated`,
-  `ManifestUpdated`, `PendingRelease`, `Released`, `Revoked`, plus all guardian events
-  (approve/veto/rescind).
+- **FR-026**: The service MUST index the following on-chain events: `PackageActivated`,
+  `ManifestUpdated`, `CheckIn`, `Renewed`, `GuardianApproved`, `GuardianVetoed`,
+  `GuardianVetoRescinded`, `GuardianApproveRescinded`, `GuardianStateReset`,
+  `PendingRelease`, `Released`, `Revoked`, `PackageRescued`.
+  - `CheckIn` MUST update `package_cache.lastCheckIn`.
+  - `Renewed` MUST update `package_cache.paidUntil`.
+  - `GuardianStateReset` MUST bulk-clear the guardian flags in `guardian_cache` for the package.
+  - `PackageRescued` MUST clear `package_cache.pendingSince`.
 - **FR-027**: The indexer MUST be reorg-safe: it MUST store each processed block's hash, detect
   a mismatch between a stored block hash and the canonical chain, and rewind to the last
   consistent block before replaying.

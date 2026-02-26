@@ -30,8 +30,8 @@ wallet completes SIWE verification.
 
 An event-sourced read cache of on-chain package state. Never authoritative for auth —
 live chain reads are always preferred for authorization (Constitution III). Populated
-and updated by the indexer from `Activated`, `ManifestUpdated`, `PendingRelease`,
-`Released`, `Revoked` events.
+and updated by the indexer from `PackageActivated`, `ManifestUpdated`, `CheckIn`, `Renewed`,
+`PendingRelease`, `Released`, `Revoked`, `PackageRescued` events.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -39,12 +39,14 @@ and updated by the indexer from `Activated`, `ManifestUpdated`, `PendingRelease`
 | `chain_id` | `BIGINT` NOT NULL | EVM chain identifier |
 | `proxy_address` | `VARCHAR(42)` NOT NULL | policy proxy (EIP-55) |
 | `package_key` | `VARCHAR(66)` NOT NULL | `bytes32` hex with `0x` prefix |
-| `owner_address` | `VARCHAR(42)` | from `Activated` event |
-| `beneficiary_address` | `VARCHAR(42)` | from `Activated` event |
+| `owner_address` | `VARCHAR(42)` | from `PackageActivated` event |
+| `beneficiary_address` | `VARCHAR(42)` | from `PackageActivated` event |
 | `manifest_uri` | `TEXT` | latest observed `manifestUri` |
 | `cached_status` | `VARCHAR(20)` | last observed status string (informational only) |
 | `pending_since` | `TIMESTAMPTZ` | sourced from `PendingRelease` event |
 | `released_at` | `TIMESTAMPTZ` | sourced from `Released` event |
+| `last_check_in` | `TIMESTAMPTZ` | sourced from `CheckIn` event |
+| `paid_until` | `TIMESTAMPTZ` | sourced from `Renewed` event |
 | `last_indexed_block` | `BIGINT` | highest block we have processed events for |
 | `created_at` | `TIMESTAMPTZ` NOT NULL | |
 | `updated_at` | `TIMESTAMPTZ` NOT NULL | updated on every indexer write |
@@ -56,7 +58,7 @@ and updated by the indexer from `Activated`, `ManifestUpdated`, `PendingRelease`
 
 ### 1.3 `guardian_cache`
 
-Cached on-chain guardian list per package. Populated from `Activated` events and updated
+Cached on-chain guardian list per package. Populated from `PackageActivated` events and updated
 on guardian state reset events. Used only for UX read paths; never for authorization.
 
 | Column | Type | Notes |
@@ -81,14 +83,14 @@ Idempotency enforced by unique constraint on `(tx_hash, log_index)`.
 | `chain_id` | `BIGINT` NOT NULL | |
 | `proxy_address` | `VARCHAR(42)` NOT NULL | |
 | `package_key` | `VARCHAR(66)` NOT NULL | |
-| `event_type` | `VARCHAR(40)` NOT NULL | `Activated`, `ManifestUpdated`, `PendingRelease`, `Released`, `Revoked`, `GuardianVetoed`, `GuardianVetoRescinded`, `GuardianApproved`, `GuardianApproveRescinded`, `GuardianStateReset` |
+| `event_type` | `VARCHAR(40)` NOT NULL | `PackageActivated`, `ManifestUpdated`, `CheckIn`, `Renewed`, `GuardianApproved`, `GuardianVetoed`, `GuardianVetoRescinded`, `GuardianApproveRescinded`, `GuardianStateReset`, `PendingRelease`, `Released`, `Revoked`, `PackageRescued` (13 types) |
 | `emitting_address` | `VARCHAR(42)` NOT NULL | topic[0] — always proxy |
 | `block_number` | `BIGINT` NOT NULL | |
 | `block_hash` | `VARCHAR(66)` NOT NULL | for post-insert reorg audit |
 | `tx_hash` | `VARCHAR(66)` NOT NULL | |
 | `log_index` | `INT` NOT NULL | position within block |
 | `block_timestamp` | `TIMESTAMPTZ` NOT NULL | from block header |
-| `raw_data` | `JSONB` | decoded event fields (event-type specific) |
+| `raw_data` | `JSONB` | decoded event fields (event-type specific); for `PendingRelease`, includes `reason_flags` (bit 0 = inactivity, bit 1 = funding lapse) |
 | `created_at` | `TIMESTAMPTZ` NOT NULL | |
 
 **Unique constraint**: `(tx_hash, log_index)` — idempotency guard.
@@ -187,7 +189,7 @@ processed_blocks ─── independent; keyed by (chain_id, proxy_address, block
 | `package_cache` | `proxy_address` | EIP-55 checksummed, 42 chars |
 | `package_cache` | `cached_status` | one of `DRAFT`, `ACTIVE`, `WARNING`, `PENDING_RELEASE`, `CLAIMABLE`, `RELEASED`, `REVOKED` |
 | `guardian_cache` | `position` | 0–6 (max 7 guardians, contract-enforced) |
-| `event_records` | `event_type` | one of the 10 named event types |
+| `event_records` | `event_type` | one of the 13 named event types |
 | `stored_artifacts` | `sha256_hash` | `0x` + 64 hex chars |
 | `stored_artifacts` | `artifact_type` | `manifest` or `ciphertext` |
 | `notification_targets` | `channel_type` | `email` or `webhook` |
@@ -202,12 +204,15 @@ updates `package_cache` directly.
 
 | Event | Cache update |
 |---|---|
-| `Activated` | INSERT `package_cache` row; INSERT `guardian_cache` rows; set `cached_status = ACTIVE` |
+| `PackageActivated` | INSERT `package_cache` row; INSERT `guardian_cache` rows; set `cached_status = ACTIVE` |
 | `ManifestUpdated` | UPDATE `manifest_uri` |
-| `PendingRelease` | UPDATE `pending_since`, `cached_status = PENDING_RELEASE` (or `WARNING` if service calls chain for confirmation) |
+| `CheckIn` | UPDATE `last_check_in` |
+| `Renewed` | UPDATE `paid_until` |
+| `PendingRelease` | UPDATE `pending_since`, `cached_status = PENDING_RELEASE`; `raw_data.reason_flags` records trigger bits |
 | `Released` | UPDATE `released_at`, `cached_status = RELEASED` |
 | `Revoked` | UPDATE `cached_status = REVOKED` |
-| `GuardianStateReset` | (no specific cache column; event record stored for query) |
+| `PackageRescued` | UPDATE `pending_since = NULL`, `cached_status = ACTIVE` |
+| `GuardianStateReset` | Clear all `guardian_cache` veto/approval flags for the package |
 
 `WARNING` and `CLAIMABLE` are never received as events — they are lazily derived by the
 contract. The backend always calls `getPackageStatus()` live for authoritative status; the

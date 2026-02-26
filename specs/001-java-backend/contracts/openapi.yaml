@@ -7,9 +7,9 @@ info:
     transaction payloads, Lit ACC generation/validation, event indexing, artifact
     storage, and notification subscription management.
 
-    **Security**: All endpoints except `/auth/**`, `/packages/{packageKey}/status`,
+    **Security**: All endpoints except `/auth/**`, `/config`, `/packages/{packageKey}/status`,
     `/packages/{packageKey}/recovery-kit`, `/packages/{packageKey}/tx/renew`,
-    `/acc-template`, and `/health/**` require
+    `/packages/{packageKey}/tx/rescue`, `/acc-template`, and `/health/**` require
     a valid Bearer JWT issued by `POST /auth/verify`.
 
     **Non-custodial**: All `**/prepare` and `**/payload` endpoints return unsigned
@@ -50,22 +50,30 @@ components:
       type: object
       required: [chainId, proxyAddress, packageKey, status]
       properties:
-        chainId:           { type: integer, format: int64 }
-        proxyAddress:      { type: string }
-        packageKey:        { type: string, description: "bytes32 hex (0x-prefixed)" }
+        chainId:              { type: integer, format: int64 }
+        proxyAddress:         { type: string }
+        packageKey:           { type: string, description: "bytes32 hex (0x-prefixed)" }
         status:
           type: string
           enum: [DRAFT, ACTIVE, WARNING, PENDING_RELEASE, CLAIMABLE, RELEASED, REVOKED]
-        ownerAddress:      { type: string, nullable: true }
-        beneficiaryAddress:{ type: string, nullable: true }
+        ownerAddress:         { type: string, nullable: true }
+        beneficiaryAddress:   { type: string, nullable: true }
         guardians:
           type: array
           items: { type: string }
-        manifestUri:       { type: string, nullable: true }
-        pendingSince:      { type: string, format: date-time, nullable: true }
-        releasedAt:        { type: string, format: date-time, nullable: true }
-        cachedAt:          { type: string, format: date-time, description: "When the cache entry was last updated; absent on live-read-only responses" }
-        liveRead:          { type: boolean, description: "true if status was read directly from chain in this request" }
+        guardianQuorum:       { type: integer, minimum: 0, nullable: true, description: "0 = no guardian quorum required" }
+        manifestUri:          { type: string, nullable: true }
+        warnThreshold:        { type: integer, format: int64, nullable: true, description: "seconds" }
+        inactivityThreshold:  { type: integer, format: int64, nullable: true, description: "seconds" }
+        gracePeriodSeconds:   { type: integer, nullable: true }
+        lastCheckIn:          { type: string, format: date-time, nullable: true }
+        paidUntil:            { type: string, format: date-time, nullable: true }
+        vetoCount:            { type: integer, minimum: 0, nullable: true }
+        approvalCount:        { type: integer, minimum: 0, nullable: true }
+        pendingSince:         { type: string, format: date-time, nullable: true }
+        releasedAt:           { type: string, format: date-time, nullable: true }
+        cachedAt:             { type: string, format: date-time, description: "When the cache entry was last updated; absent on live-read-only responses" }
+        liveRead:             { type: boolean, description: "true if status was read directly from chain in this request" }
 
     RecoveryKit:
       type: object
@@ -169,6 +177,31 @@ components:
         lastDeliveryStatus:  { type: string, enum: [delivered, failed, retrying], nullable: true }
 
 paths:
+
+  # ─── Instance Config ──────────────────────────────────────────
+
+  /config:
+    get:
+      summary: Instance configuration and funding status
+      description: |
+        Unauthenticated. Returns the chain ID, proxy address, and whether
+        funding (ETH renewal) is enabled for this deployment. Clients MUST
+        check fundingEnabled before presenting /tx/renew or ETH-bearing
+        /tx/activate flows; a disabled instance will revert with FundingDisabled().
+      operationId: getConfig
+      security: []
+      responses:
+        "200":
+          description: Instance configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chainId, proxyAddress, fundingEnabled]
+                properties:
+                  chainId:        { type: integer, format: int64 }
+                  proxyAddress:   { type: string, description: "EIP-55 checksummed proxy address" }
+                  fundingEnabled: { type: boolean, description: "true when pricePerSecond != 0" }
 
   # ─── Authentication ─────────────────────────────────────────────────────────
 
@@ -389,8 +422,8 @@ paths:
 
   /packages/{packageKey}/tx/update-manifest:
     post:
-      summary: Prepare updateManifest() tx payload
-      operationId: prepareUpdateManifest
+      summary: Prepare updateManifestUri() tx payload
+      operationId: prepareUpdateManifestUri
       parameters:
         - name: packageKey
           in: path
@@ -440,6 +473,37 @@ paths:
               schema: { $ref: '#/components/schemas/TxPayload' }
         "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /packages/{packageKey}/tx/rescue:
+    post:
+      summary: Prepare rescue() tx payload
+      description: |
+        Unauthenticated — the upgrade authority controls the signing wallet; contract
+        enforces NotAuthorized() if caller is not the stored upgrade authority.
+        Only valid when package is in PENDING_RELEASE and grace has not yet elapsed.
+      operationId: prepareRescue
+      security: []
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   # ─── Guardian Transaction Payloads ───────────────────────────────────────────
 
