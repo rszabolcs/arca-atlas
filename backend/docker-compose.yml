@@ -1,0 +1,47 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: arcadb
+    environment:
+      POSTGRES_DB: ${DB_NAME:-arca}
+      POSTGRES_USER: ${DB_USER:-arca}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-arca_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-arca}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    container_name: arca-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-arca}
+      DB_USER: ${DB_USER:-arca}
+      DB_PASSWORD: ${DB_PASSWORD:-arca_dev}
+      ARCA_EVM_RPC_URL: ${ARCA_EVM_RPC_URL}
+      ARCA_EVM_CHAIN_ID: ${ARCA_EVM_CHAIN_ID}
+      ARCA_POLICY_PROXY_ADDRESS: ${ARCA_POLICY_PROXY_ADDRESS}
+      ARCA_JWT_SECRET: ${ARCA_JWT_SECRET}
+      ARCA_JWT_TTL_SECONDS: ${ARCA_JWT_TTL_SECONDS:-3600}
+      ARCA_SIWE_DOMAIN: ${ARCA_SIWE_DOMAIN}
+      ARCA_INDEXER_START_BLOCK: ${ARCA_INDEXER_START_BLOCK}
+      ARCA_INDEXER_CONFIRMATION_DEPTH: ${ARCA_INDEXER_CONFIRMATION_DEPTH:-12}
+      ARCA_INDEXER_POLL_INTERVAL_SECONDS: ${ARCA_INDEXER_POLL_INTERVAL_SECONDS:-15}
+      ARCA_INDEXER_ENABLED: ${ARCA_INDEXER_ENABLED:-true}
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: arca-backend
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:arca}
+    username: ${DB_USER:arca}
+    password: ${DB_PASSWORD:arca_dev}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+arca:
+  evm:
+    rpc-url: ${ARCA_EVM_RPC_URL}
+    chain-id: ${ARCA_EVM_CHAIN_ID}
+    policy-proxy-address: ${ARCA_POLICY_PROXY_ADDRESS}
+
+  jwt:
+    secret: ${ARCA_JWT_SECRET}
+    ttl-seconds: ${ARCA_JWT_TTL_SECONDS:3600}
+
+  siwe:
+    domain: ${ARCA_SIWE_DOMAIN}
+
+  indexer:
+    enabled: ${ARCA_INDEXER_ENABLED:true}
+    start-block: ${ARCA_INDEXER_START_BLOCK}
+    confirmation-depth: ${ARCA_INDEXER_CONFIRMATION_DEPTH:12}
+    poll-interval-seconds: ${ARCA_INDEXER_POLL_INTERVAL_SECONDS:15}
+    lock-id: ${ARCA_INDEXER_LOCK_ID:#{T(java.lang.Math).abs(T(java.util.Objects).hash('${arca.evm.policy-proxy-address}'))}}
+
+server:
+  port: 8080
+  servlet:
+    context-path: /api/v1
+
+logging:
+  level:
+    com.arcadigitalis.backend: INFO
+    org.springframework.security: DEBUG
