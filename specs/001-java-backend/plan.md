@@ -177,7 +177,7 @@ src/main/java/com/arcadigitalis/backend/
 ├── policy/
 │   ├── PackageService.java              # Status reads, PackageView → DTO mapping
 │   ├── RoleResolver.java                # Confirm owner/guardian/beneficiary from chain
-│   ├── TxPayloadService.java            # Pre-flight 409 logic (FR-012a/d), delegate to CalldataBuilder
+│   ├── TxPayloadService.java            # Pre-flight 409 logic (FR-012d), delegate to CalldataBuilder
 │   └── FundingGuard.java                # FR-010a: HTTP 400 when fundingEnabled=false + ETH value
 │
 ├── lit/
@@ -219,7 +219,7 @@ src/test/java/com/arcadigitalis/backend/
 │   └── EventDecoderTest.java            # All 13 event types decoded correctly
 ├── policy/
 │   ├── RoleResolverTest.java            # MANDATORY: chain-based role checks, cache bypass
-│   ├── TxPayloadServiceTest.java        # Pre-flight 409 logic (FR-012a/d), funding guard
+│   ├── TxPayloadServiceTest.java        # Pre-flight 409 logic (FR-012d), funding guard
 │   └── PackageServiceTest.java          # All 7 status values, DRAFT for unknown key
 ├── lit/
 │   ├── AccTemplateBuilderTest.java      # MANDATORY: proxy binding, chainId, packageKey, requester

@@ -78,11 +78,13 @@ Verify live `REVOKED` overrides a stale `ACTIVE` in the cache. Verify `DRAFT` fo
 - [ ] T034 [US1] Create `src/main/java/com/arcadigitalis/backend/api/controller/ConfigController.java`: `GET /config` (unauthenticated, `security: []`); reads `fundingEnabled` from `Web3jConfig` bean; returns `ConfigResponse`; no auth required
 - [ ] T035 [US1] Add `GET /packages/{packageKey}/status` to `src/main/java/com/arcadigitalis/backend/api/controller/PackageController.java`: call `PackageService.getPackageView()`; validate `packageKey` format (0x-prefixed, 66 chars hex); return `PackageStatusResponse`; live chain read; requires valid JWT
 - [ ] T036 [P] [US1] Create `src/test/java/com/arcadigitalis/backend/auth/SiweVerifierTest.java` (MANDATORY): valid sig → token issued; wrong domain → `AuthException(401)`; expired nonce → `AuthException(401)`; replayed nonce → `AuthException(401)`; wrong address → `AuthException(401)`; all assertions with WireMock ecrecover stubs
-- [ ] T037 [P] [US1] Create `src/test/java/com/arcadigitalis/backend/auth/JwtServiceTest.java`: expired token rejected; valid token accepted; `sub` claim equals wallet address; `jti` is unique per issuance
+- [ ] T037 [P] [US1] Create `src/test/java/com/arcadigitalis/backend/auth/JwtServiceTest.java`: expired token rejected; valid token accepted; `sub` claim equals wallet address; `jti` is unique per issuance; replayed `jti` → `AuthException(401)` on second `verifyToken()` call (first call accepts, second call rejects) (SC-008)
 - [ ] T038 [P] [US1] Create `src/test/java/com/arcadigitalis/backend/policy/PackageServiceTest.java`: `DRAFT` returned for unknown key; all 7 status values round-trip correctly; `WARNING` not collapsed to `ACTIVE`; `CLAIMABLE` not collapsed to `PENDING_RELEASE`; live chain value overrides stale DB value
 - [ ] T039 [US1] Create `src/test/java/com/arcadigitalis/backend/integration/AuthFlowIT.java`: full SIWE → JWT → `GET /packages/{key}/status` flow using Testcontainers PostgreSQL + WireMock EVM stub; expired token → 401; domain mismatch → 401; valid flow → 200 with correct status
+- [ ] T069 [P] Create `src/main/java/com/arcadigitalis/backend/lit/ChainNameRegistry.java`: `getChainName(chainId)` → Lit chain name string (e.g. 1→`"ethereum"`, 11155111→`"sepolia"`); `ValidationException(400)` for unknown chain IDs *(moved here from Phase 7 — required by T062 `getRecoveryKit()` via `AccTemplateBuilder`)*
+- [ ] T070 [P] Create `src/main/java/com/arcadigitalis/backend/lit/AccTemplateBuilder.java`: `buildAccTemplate(chainId, proxyAddress, packageKey, beneficiaryAddress)` → complete ACC JSON `ObjectNode`; condition: `contractAddress`=proxy, `functionName`="isReleased", `functionParams`=[packageKey], `returnValueTest.value`="true"; `requester`=beneficiary; uses `ChainNameRegistry` for chain name; no Lit SDK, no network calls *(moved here from Phase 7 — required by Phase 6 T062 `RecoveryKitResponse.accCondition`)*
 
-**Checkpoint**: User Story 1 independently testable — auth + package-status complete
+**Checkpoint**: User Story 1 independently testable — auth + package-status complete; `AccTemplateBuilder` + `ChainNameRegistry` (T069–T070) available for Phase 6 (US4)
 
 ---
 
@@ -170,8 +172,6 @@ calls ever.
 `policyProxy.isReleased(packageKey)==true` condition bound to correct proxy; requester==beneficiary.
 Submit manifest with wrong proxy → 400. Submit manifest with missing encDEK → 400.
 
-- [ ] T069 [P] [US5] Create `src/main/java/com/arcadigitalis/backend/lit/ChainNameRegistry.java`: `getChainName(chainId)` → Lit chain name string (e.g. 1→`"ethereum"`, 11155111→`"sepolia"`); `ValidationException(400)` for unknown chain IDs
-- [ ] T070 [P] [US5] Create `src/main/java/com/arcadigitalis/backend/lit/AccTemplateBuilder.java`: `buildAccTemplate(chainId, proxyAddress, packageKey, beneficiaryAddress)` → complete ACC JSON `ObjectNode`; condition: `contractAddress`=proxy, `functionName`="isReleased", `functionParams`=[packageKey], `returnValueTest.value`="true"; `requester`=beneficiary; uses `ChainNameRegistry` for chain name; no Lit SDK, no network calls
 - [ ] T071 [US5] Create `src/main/java/com/arcadigitalis/backend/lit/ManifestValidator.java`: three-layer validation per FR-020: *Layer 1 (local structural)* — assert all required fields present (`packageKey`, `policy.chainId`, `policy.contract`, `keyRelease.accessControl`, `keyRelease.requester`, `keyRelease.encryptedSymmetricKey`), `contractAddress`==configured proxy, `chainId`==`ARCA_EVM_CHAIN_ID`, `functionName`=="isReleased", `functionParams[0]`==`packageKey`, `requester`==manifest `beneficiary`; *Layer 2 (live RPC)* — `PolicyReader.getPackageStatus(packageKey)` != DRAFT + on-chain `beneficiary`==manifest `requester`; *Layer 3 (blob guard)* — `encryptedSymmetricKey` non-empty, non-whitespace, length > 10 chars; any layer failure → `ValidationException(400)` identifying the failing check
 - [ ] T072 [P] [US5] Create `src/main/java/com/arcadigitalis/backend/api/dto/` lit records: `AccTemplateRequest(chainId, proxyAddress, packageKey, beneficiaryAddress)`, `AccTemplateResponse(accJson)`, `ValidateManifestRequest(manifestJson)`, `ValidateManifestResponse(valid, failedLayer, details)` — all `record` types
 - [ ] T073 [US5] Create `src/main/java/com/arcadigitalis/backend/api/controller/LitController.java`: `GET /acc-template` (auth required) → `AccTemplateBuilder.buildAccTemplate()`; `POST /validate-manifest` (auth required) → `ManifestValidator.validate()`; 400 on any validation failure; zero Lit network calls
@@ -261,7 +261,7 @@ Cuts across all user stories.
 - **Phase 3 (US1, P1)**: Depends on Phase 2 — **MVP entry point**
 - **Phase 4 (US2, P2)**: Depends on **Phase 2 and T030** (`PolicyReader`, Phase 3) — T030 MUST be complete before Phase 4 begins
 - **Phase 5 (US3, P3)**: Depends on Phase 4 (extends `TxPayloadService` + `TxController`)
-- **Phase 6 (US4, P4)**: Depends on Phase 3 (extends `PackageService` + `PackageController`)
+- **Phase 6 (US4, P4)**: Depends on Phase 3 (extends `PackageService` + `PackageController`; `AccTemplateBuilder`/`ChainNameRegistry` T069–T070 are in Phase 3)
 - **Phase 7 (US5, P5)**: Depends on Phase 2 + Phase 3 (`PolicyReader` in ManifestValidator layer 2)
 - **Phase 8 (US6, P6)**: Depends on Phase 2 (persistence layer only)
 - **Phase 9 (US7, P7)**: Depends on Phase 2 + Phase 3 (`PolicyReader`); enhances `PackageService`
@@ -274,7 +274,7 @@ Cuts across all user stories.
 | US1 (P1) | Foundational only | ✅ Yes — auth + status read |
 | US2 (P2) | Foundational + `PolicyReader` (T030 from US1) | ✅ Yes — owner payloads |
 | US3 (P3) | US2 (`TxPayloadService`, `TxController` skeleton) | ✅ Yes — guardian endpoints |
-| US4 (P4) | Foundational + `PolicyReader`/`PackageService` (US1) | ✅ Yes — recovery kit |
+| US4 (P4) | Foundational + `PolicyReader`/`PackageService` + `AccTemplateBuilder` (T069–T070, Phase 3) | ✅ Yes — recovery kit |
 | US5 (P5) | Foundational + `PolicyReader` (US1) | ✅ Yes — Lit ACC + validation |
 | US6 (P6) | Foundational + persistence only | ✅ Yes — storage endpoints |
 | US7 (P7) | Foundational + `PolicyReader`/cache entities | ✅ Yes — indexer + events |
@@ -356,11 +356,11 @@ Task T039: AuthFlowIT.java (integration)
 |---|---|---|
 | Phase 1 | T001–T007 | Setup (7 tasks) |
 | Phase 2 | T008–T023 | Foundational / DB / security (16 tasks) |
-| Phase 3 | T024–T039 | US1 Auth + Package Status (16 tasks) |
+| Phase 3 | T024–T039, T069–T070 | US1 Auth + Package Status + Lit utilities (18 tasks) |
 | Phase 4 | T040–T054 | US2 Owner Lifecycle (15 tasks) |
 | Phase 5 | T055–T061 | US3 Guardian Workflow (7 tasks) |
 | Phase 6 | T062–T068 | US4 Beneficiary Recovery (7 tasks) |
-| Phase 7 | T069–T075 | US5 Lit ACC + Manifest Validation (7 tasks) |
+| Phase 7 | T071–T075 | US5 Manifest Validation (5 tasks) |
 | Phase 8 | T076–T080 | US6 Artifact Storage (5 tasks) |
 | Phase 9 | T081–T095 | US7 Event Indexing + Notifications (15 tasks) |
 | Phase 10 | T096–T107 | Polish + Constitution compliance (12 tasks) |

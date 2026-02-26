@@ -492,7 +492,8 @@ complete.
   a mismatch between a stored block hash and the canonical chain, and rewind to the last
   consistent block before replaying.
 - **FR-028**: The indexer MUST apply a configurable confirmation depth before treating an event
-  as finalized.
+  as finalized (default: 12 blocks — matches the `ARCA_INDEXER_CONFIRMATION_DEPTH` env var default
+  configured in T005).
 - **FR-028a**: On first run (no sync state in `processed_blocks`), the indexer MUST begin
   scanning from the block number configured in `ARCA_INDEXER_START_BLOCK`. This value MUST be
   set to the contract deployment block; syncing from before deployment is wasted work, and
@@ -514,8 +515,8 @@ complete.
   beneficiary to create, update, and delete a `NotificationTarget` (subscription) for a specific
   package and one or more event types; no other role may register or modify subscriptions for a
   package.
-- **FR-031b**: The service MUST support at least one of: email address, webhook URL, or push
-  token as a notification target type per subscription record.
+- **FR-031b**: The service MUST support email address, webhook URL, and push token as notification
+  target channel types; all three channel types MUST be implemented per subscription record.
 - **FR-031c**: The service MUST validate that the address registering a subscription is the
   on-chain owner or beneficiary of the referenced package before persisting the target.
 - **FR-032**: Notification delivery failures MUST be logged and retried a bounded number of
