@@ -1,0 +1,835 @@
+openapi: "3.0.3"
+info:
+  title: Arca Java Backend API
+  version: "1.0.0"
+  description: |
+    REST API for ArcaDigitalis Vault. Provides SIWE authentication, non-custodial
+    transaction payloads, Lit ACC generation/validation, event indexing, artifact
+    storage, and notification subscription management.
+
+    **Security**: All endpoints except `/auth/**`, `/packages/{packageKey}/status`,
+    `/packages/{packageKey}/recovery-kit`, `/acc-template`, and `/health/**` require
+    a valid Bearer JWT issued by `POST /auth/verify`.
+
+    **Non-custodial**: All `**/prepare` and `**/payload` endpoints return unsigned
+    calldata. The backend never signs or submits transactions.
+
+servers:
+  - url: /api/v1
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:    { type: string }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+
+    TxPayload:
+      type: object
+      required: [to, data, gasEstimate]
+      properties:
+        to:          { type: string, description: "Proxy contract address (EIP-55)" }
+        data:        { type: string, description: "ABI-encoded calldata (0x-prefixed hex)" }
+        value:       { type: string, description: "ETH value in wei (hex); omitted or '0x0' if none" }
+        gasEstimate: { type: string, description: "Estimated gas (hex)" }
+
+    PackageStatus:
+      type: object
+      required: [chainId, proxyAddress, packageKey, status]
+      properties:
+        chainId:           { type: integer, format: int64 }
+        proxyAddress:      { type: string }
+        packageKey:        { type: string, description: "bytes32 hex (0x-prefixed)" }
+        status:
+          type: string
+          enum: [DRAFT, ACTIVE, WARNING, PENDING_RELEASE, CLAIMABLE, RELEASED, REVOKED]
+        ownerAddress:      { type: string, nullable: true }
+        beneficiaryAddress:{ type: string, nullable: true }
+        guardians:
+          type: array
+          items: { type: string }
+        manifestUri:       { type: string, nullable: true }
+        pendingSince:      { type: string, format: date-time, nullable: true }
+        releasedAt:        { type: string, format: date-time, nullable: true }
+        cachedAt:          { type: string, format: date-time, description: "When the cache entry was last updated; absent on live-read-only responses" }
+        liveRead:          { type: boolean, description: "true if status was read directly from chain in this request" }
+
+    RecoveryKit:
+      type: object
+      required: [chainId, proxyAddress, packageKey, status]
+      properties:
+        chainId:        { type: integer, format: int64 }
+        proxyAddress:   { type: string }
+        packageKey:     { type: string }
+        status:         { type: string, enum: [DRAFT, ACTIVE, WARNING, PENDING_RELEASE, CLAIMABLE, RELEASED, REVOKED] }
+        manifestUri:    { type: string, nullable: true }
+        releasedAt:     { type: string, format: date-time, nullable: true }
+        litAcc:         { $ref: '#/components/schemas/LitAccCondition', nullable: true }
+        liveRead:       { type: boolean }
+
+    LitAccCondition:
+      type: object
+      required: [conditionType, contractAddress, functionName, functionParams, chain, returnValueTest, requester]
+      properties:
+        conditionType:   { type: string, enum: [evmContract] }
+        contractAddress: { type: string, description: "Policy proxy address" }
+        functionName:    { type: string, enum: [isReleased] }
+        functionParams:  { type: array, items: { type: string }, description: "[packageKey]" }
+        functionAbi:     { type: object }
+        chain:           { type: string, description: "Lit chain name (e.g. ethereum, sepolia)" }
+        returnValueTest: { type: object, properties: { key: {type: string}, comparator: {type: string}, value: {type: string} } }
+        requester:       { type: string, description: "Beneficiary address" }
+
+    ManifestValidationResult:
+      type: object
+      required: [valid, checks]
+      properties:
+        valid:  { type: boolean }
+        checks:
+          type: object
+          properties:
+            structuralFields:     { type: boolean }
+            proxyAddressMatch:    { type: boolean }
+            chainIdMatch:         { type: boolean }
+            packageKeyMatch:      { type: boolean }
+            functionNameMatch:    { type: boolean }
+            requesterMatch:       { type: boolean }
+            encDekPresent:        { type: boolean }
+            packageActivated:     { type: boolean, description: "Live RPC check" }
+            onChainBeneficiary:   { type: boolean, description: "Live RPC: beneficiary == requester" }
+        errors:
+          type: array
+          items: { type: string }
+
+    EventRecord:
+      type: object
+      required: [id, chainId, proxyAddress, packageKey, eventType, blockNumber, txHash, logIndex, blockTimestamp]
+      properties:
+        id:             { type: string, format: uuid }
+        chainId:        { type: integer, format: int64 }
+        proxyAddress:   { type: string }
+        packageKey:     { type: string }
+        eventType:      { type: string }
+        emittingAddress:{ type: string }
+        blockNumber:    { type: integer, format: int64 }
+        txHash:         { type: string }
+        logIndex:       { type: integer }
+        blockTimestamp: { type: string, format: date-time }
+        data:           { type: object, additionalProperties: true }
+
+    PagedEventRecords:
+      type: object
+      required: [items, total, cursor]
+      properties:
+        items:  { type: array, items: { $ref: '#/components/schemas/EventRecord' } }
+        total:  { type: integer, format: int64 }
+        cursor: { type: string, nullable: true, description: "Opaque pagination cursor; null on last page" }
+
+    StoredArtifact:
+      type: object
+      required: [id, artifactType, sha256Hash, sizeBytes, createdAt]
+      properties:
+        id:                  { type: string, format: uuid }
+        artifactType:        { type: string, enum: [manifest, ciphertext] }
+        sha256Hash:          { type: string }
+        ipfsUri:             { type: string, nullable: true }
+        s3Uri:               { type: string, nullable: true }
+        sizeBytes:           { type: integer, format: int64 }
+        createdAt:           { type: string, format: date-time }
+        storageConfirmedAt:  { type: string, format: date-time, nullable: true }
+
+    NotificationTarget:
+      type: object
+      required: [id, chainId, proxyAddress, packageKey, subscriberAddress, eventTypes, channelType, channelValue, active]
+      properties:
+        id:                  { type: string, format: uuid }
+        chainId:             { type: integer, format: int64 }
+        proxyAddress:        { type: string }
+        packageKey:          { type: string }
+        subscriberAddress:   { type: string }
+        eventTypes:          { type: array, items: { type: string } }
+        channelType:         { type: string, enum: [email, webhook] }
+        channelValue:        { type: string }
+        active:              { type: boolean }
+        createdAt:           { type: string, format: date-time }
+        lastDeliveryAttempt: { type: string, format: date-time, nullable: true }
+        lastDeliveryStatus:  { type: string, enum: [delivered, failed, retrying], nullable: true }
+
+paths:
+
+  # ─── Authentication ─────────────────────────────────────────────────────────
+
+  /auth/nonce:
+    post:
+      summary: Issue a SIWE nonce
+      operationId: issueNonce
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [walletAddress]
+              properties:
+                walletAddress: { type: string, description: "EIP-55 address" }
+      responses:
+        "200":
+          description: Nonce issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nonce, expiresAt]
+                properties:
+                  nonce:     { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "400": { description: Invalid address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/verify:
+    post:
+      summary: Verify SIWE message and issue JWT
+      operationId: verifySiwe
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message, signature]
+              properties:
+                message:   { type: string, description: "Raw EIP-4361 message string" }
+                signature: { type: string, description: "0x-prefixed hex signature" }
+      responses:
+        "200":
+          description: JWT issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expiresAt]
+                properties:
+                  token:     { type: string, description: "Bearer JWT" }
+                  expiresAt: { type: string, format: date-time }
+        "400": { description: Malformed message, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "401": { description: Invalid signature or expired/replayed nonce, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Package Status ──────────────────────────────────────────────────────────
+
+  /packages/{packageKey}/status:
+    get:
+      summary: Get live package status
+      operationId: getPackageStatus
+      security: []
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string, description: "bytes32 hex (0x-prefixed)" }
+        - name: chainId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: proxyAddress
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Package status (live chain read)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackageStatus' }
+        "503": { description: RPC unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Recovery Kit ────────────────────────────────────────────────────────────
+
+  /packages/{packageKey}/recovery-kit:
+    get:
+      summary: Get beneficiary recovery kit
+      operationId: getRecoveryKit
+      security: []
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+        - name: chainId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: proxyAddress
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Recovery kit (always attempts live chain read)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecoveryKit' }
+        "503": { description: RPC unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Owner Transaction Payloads ──────────────────────────────────────────────
+
+  /packages/{packageKey}/tx/activate:
+    post:
+      summary: Prepare activate() tx payload
+      operationId: prepareActivate
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress, manifestUri, beneficiary, warnThreshold, inactivityThreshold, gracePeriodSeconds, paidUntil]
+              properties:
+                chainId:              { type: integer, format: int64 }
+                proxyAddress:         { type: string }
+                manifestUri:          { type: string }
+                beneficiary:          { type: string }
+                warnThreshold:        { type: integer, format: int64, description: "seconds" }
+                inactivityThreshold:  { type: integer, format: int64, description: "seconds" }
+                gracePeriodSeconds:   { type: integer, format: int64 }
+                paidUntil:            { type: integer, format: int64, description: "UNIX timestamp" }
+                guardians:            { type: array, items: { type: string }, maxItems: 7 }
+                guardianQuorum:       { type: integer, minimum: 0, maximum: 7 }
+                ethValue:             { type: string, description: "ETH in wei (hex); must be 0x0 if funding disabled" }
+      responses:
+        "200":
+          description: Unsigned activation payload
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "403": { description: Not the package owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /packages/{packageKey}/tx/check-in:
+    post:
+      summary: Prepare checkIn() tx payload
+      operationId: prepareCheckIn
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          description: Unsigned checkIn payload
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is CLAIMABLE — checkIn will revert on-chain with AlreadyClaimable()
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /packages/{packageKey}/tx/renew:
+    post:
+      summary: Prepare renew() tx payload
+      operationId: prepareRenew
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress, ethValue]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+                ethValue:     { type: string, description: "ETH in wei (hex)" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /packages/{packageKey}/tx/update-manifest:
+    post:
+      summary: Prepare updateManifest() tx payload
+      operationId: prepareUpdateManifest
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress, manifestUri]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+                manifestUri:  { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /packages/{packageKey}/tx/revoke:
+    post:
+      summary: Prepare revoke() tx payload
+      operationId: prepareRevoke
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Guardian Transaction Payloads ───────────────────────────────────────────
+
+  /packages/{packageKey}/tx/guardian-approve:
+    post:
+      summary: Prepare guardianApprove() tx payload
+      operationId: prepareGuardianApprove
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not a guardian for this package, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /packages/{packageKey}/tx/guardian-veto:
+    post:
+      summary: Prepare guardianVeto() tx payload
+      operationId: prepareGuardianVeto
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /packages/{packageKey}/tx/guardian-rescind-veto:
+    post:
+      summary: Prepare guardianRescindVeto() tx payload
+      operationId: prepareGuardianRescindVeto
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /packages/{packageKey}/tx/guardian-rescind-approve:
+    post:
+      summary: Prepare guardianRescindApprove() tx payload
+      operationId: prepareGuardianRescindApprove
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Beneficiary ─────────────────────────────────────────────────────────────
+
+  /packages/{packageKey}/tx/claim:
+    post:
+      summary: Prepare claim() tx payload for beneficiary
+      operationId: prepareClaim
+      parameters:
+        - name: packageKey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress]
+              properties:
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TxPayload' }
+        "403": { description: Not the beneficiary, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is not CLAIMABLE (current status returned in error details)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ─── Lit Integration ─────────────────────────────────────────────────────────
+
+  /acc-template:
+    get:
+      summary: Generate a Lit ACC template for a package
+      operationId: getAccTemplate
+      security: []
+      parameters:
+        - name: chainId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: proxyAddress
+          in: query
+          required: true
+          schema: { type: string }
+        - name: packageKey
+          in: query
+          required: true
+          schema: { type: string }
+        - name: beneficiary
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Generated Lit ACC condition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LitAccCondition' }
+        "400": { description: Invalid parameters, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /validate-manifest:
+    post:
+      summary: Validate a vault manifest (3-layer check)
+      operationId: validateManifest
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Full manifest JSON document
+              required: [packageKey, policy, artifacts, keyRelease]
+              properties:
+                packageKey: { type: string }
+                policy:
+                  type: object
+                  required: [chainId, contract]
+                  properties:
+                    chainId:  { type: integer, format: int64 }
+                    contract: { type: string }
+                artifacts:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      ciphertextUri:  { type: string }
+                      ciphertextHash: { type: string }
+                keyRelease:
+                  type: object
+                  required: [encryptedSymmetricKey, accessControl, requester]
+                  properties:
+                    encryptedSymmetricKey: { type: string }
+                    accessControl:         { type: object }
+                    requester:             { type: string }
+      responses:
+        "200":
+          description: Validation result (may contain valid=false with error details)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManifestValidationResult' }
+        "400": { description: Structurally unparse-able input, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "503": { description: RPC unavailable for live beneficiary check, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Artifact Storage ────────────────────────────────────────────────────────
+
+  /artifacts:
+    post:
+      summary: Pin manifest or ciphertext artifact
+      operationId: pinArtifact
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [artifactType, sha256Hash, content]
+              properties:
+                artifactType: { type: string, enum: [manifest, ciphertext] }
+                sha256Hash:   { type: string, description: "Expected sha256 (0x-prefixed hex)" }
+                chainId:      { type: integer, format: int64 }
+                proxyAddress: { type: string }
+                packageKey:   { type: string }
+                content:      { type: string, format: binary }
+      responses:
+        "201":
+          description: Artifact pinned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoredArtifact' }
+        "422": { description: sha256 mismatch, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /artifacts/{id}:
+    get:
+      summary: Retrieve artifact metadata by ID
+      operationId: getArtifact
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoredArtifact' }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Event Index ─────────────────────────────────────────────────────────────
+
+  /events:
+    get:
+      summary: Paginated indexed event query
+      operationId: listEvents
+      security: []
+      parameters:
+        - name: chainId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: proxyAddress
+          in: query
+          required: true
+          schema: { type: string }
+        - name: ownerAddress
+          in: query
+          schema: { type: string }
+        - name: guardianAddress
+          in: query
+          schema: { type: string }
+        - name: beneficiaryAddress
+          in: query
+          schema: { type: string }
+        - name: packageKey
+          in: query
+          schema: { type: string }
+        - name: eventType
+          in: query
+          schema: { type: string }
+        - name: fromTime
+          in: query
+          schema: { type: string, format: date-time }
+        - name: toTime
+          in: query
+          schema: { type: string, format: date-time }
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PagedEventRecords' }
+        "400": { description: Invalid filter parameters, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Notification Subscriptions ──────────────────────────────────────────────
+
+  /notifications/subscriptions:
+    post:
+      summary: Create notification subscription
+      operationId: createSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chainId, proxyAddress, packageKey, eventTypes, channelType, channelValue]
+              properties:
+                chainId:       { type: integer, format: int64 }
+                proxyAddress:  { type: string }
+                packageKey:    { type: string }
+                eventTypes:    { type: array, items: { type: string }, minItems: 1 }
+                channelType:   { type: string, enum: [email, webhook] }
+                channelValue:  { type: string }
+      responses:
+        "201":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationTarget' }
+        "403":
+          description: Caller is not the on-chain owner or beneficiary of the package
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /notifications/subscriptions/{id}:
+    put:
+      summary: Update notification subscription
+      operationId: updateSubscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                eventTypes:   { type: array, items: { type: string } }
+                channelValue: { type: string }
+                active:       { type: boolean }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationTarget' }
+        "403": { description: Not the subscription owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+    delete:
+      summary: Delete notification subscription
+      operationId: deleteSubscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Deleted }
+        "403": { description: Not the subscription owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ─── Health ──────────────────────────────────────────────────────────────────
+
+  /health/live:
+    get:
+      summary: Liveness probe
+      operationId: liveness
+      security: []
+      responses:
+        "200": { description: Service is alive }
+
+  /health/ready:
+    get:
+      summary: Readiness probe (DB + RPC reachability)
+      operationId: readiness
+      security: []
+      responses:
+        "200": { description: Service is ready }
+        "503": { description: Not ready (DB or RPC unreachable), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
