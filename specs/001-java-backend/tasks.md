@@ -81,10 +81,10 @@ Verify live `REVOKED` overrides a stale `ACTIVE` in the cache. Verify `DRAFT` fo
 - [ ] T037 [P] [US1] Create `src/test/java/com/arcadigitalis/backend/auth/JwtServiceTest.java`: expired token rejected; valid token accepted; `sub` claim equals wallet address; `jti` is unique per issuance; replayed `jti` → `AuthException(401)` on second `verifyToken()` call (first call accepts, second call rejects) (SC-008)
 - [ ] T038 [P] [US1] Create `src/test/java/com/arcadigitalis/backend/policy/PackageServiceTest.java`: `DRAFT` returned for unknown key; all 7 status values round-trip correctly; `WARNING` not collapsed to `ACTIVE`; `CLAIMABLE` not collapsed to `PENDING_RELEASE`; live chain value overrides stale DB value
 - [ ] T039 [US1] Create `src/test/java/com/arcadigitalis/backend/integration/AuthFlowIT.java`: full SIWE → JWT → `GET /packages/{key}/status` flow using Testcontainers PostgreSQL + WireMock EVM stub; expired token → 401; domain mismatch → 401; valid flow → 200 with correct status
-- [ ] T069 [P] Create `src/main/java/com/arcadigitalis/backend/lit/ChainNameRegistry.java`: `getChainName(chainId)` → Lit chain name string (e.g. 1→`"ethereum"`, 11155111→`"sepolia"`); `ValidationException(400)` for unknown chain IDs *(moved here from Phase 7 — required by T062 `getRecoveryKit()` via `AccTemplateBuilder`)*
-- [ ] T070 [P] Create `src/main/java/com/arcadigitalis/backend/lit/AccTemplateBuilder.java`: `buildAccTemplate(chainId, proxyAddress, packageKey, beneficiaryAddress)` → complete ACC JSON `ObjectNode`; condition: `contractAddress`=proxy, `functionName`="isReleased", `functionParams`=[packageKey], `returnValueTest.value`="true"; `requester`=beneficiary; uses `ChainNameRegistry` for chain name; no Lit SDK, no network calls *(moved here from Phase 7 — required by Phase 6 T062 `RecoveryKitResponse.accCondition`)*
+- [ ] T040 [P] Create `src/main/java/com/arcadigitalis/backend/lit/ChainNameRegistry.java`: `getChainName(chainId)` → Lit chain name string (e.g. 1→`"ethereum"`, 11155111→`"sepolia"`); `ValidationException(400)` for unknown chain IDs
+- [ ] T041 [P] Create `src/main/java/com/arcadigitalis/backend/lit/AccTemplateBuilder.java`: `buildAccTemplate(chainId, proxyAddress, packageKey, beneficiaryAddress)` → complete ACC JSON `ObjectNode`; condition: `contractAddress`=proxy, `functionName`="isReleased", `functionParams`=[packageKey], `returnValueTest.value`="true"; `requester`=beneficiary; uses `ChainNameRegistry` for chain name; no Lit SDK, no network calls
 
-**Checkpoint**: User Story 1 independently testable — auth + package-status complete; `AccTemplateBuilder` + `ChainNameRegistry` (T069–T070) available for Phase 6 (US4)
+**Checkpoint**: User Story 1 independently testable — auth + package-status complete; `AccTemplateBuilder` + `ChainNameRegistry` (T040–T041) available for Phase 6 (US4)
 
 ---
 
@@ -98,21 +98,21 @@ by the backend. Funding guard rejects calldata when `fundingEnabled=false`.
 sign and submit each returned calldata on testnet; verify correct chain state transitions after each.
 Verify `checkIn` returns 409 for `CLAIMABLE`. Verify `renew` and `rescue` work unauthenticated.
 
-- [ ] T040 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/evm/CalldataBuilder.java`: ABI-encode all 11 mutating contract functions using Web3j `Function` + `FunctionEncoder.encode()`: `activate(bytes32,string,address[],uint256,uint256,uint256)`, `checkIn(bytes32)`, `renew(bytes32)`, `updateManifestUri(bytes32,string)`, `guardianApprove(bytes32)`, `guardianVeto(bytes32)`, `guardianRescindVeto(bytes32)`, `guardianRescindApprove(bytes32)`, `claim(bytes32)`, `revoke(bytes32)`, `rescue(bytes32)`; return hex-encoded calldata string
-- [ ] T041 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/policy/RoleResolver.java`: `confirmOwner(packageKey, sessionAddress)` — call `PolicyReader.getPackage()`, compare ownerAddress → `AccessDeniedException(403)` on mismatch; `confirmGuardian(packageKey, sessionAddress)` — check guardian list from chain; `confirmBeneficiary(packageKey, sessionAddress)` — check on-chain beneficiary; NEVER use `guardian_cache` or `package_cache` for authorization
-- [ ] T042 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/policy/FundingGuard.java`: `assertFundingAllowed(requestEthValue)` — if `fundingEnabled=false` (from `Web3jConfig` bean) AND `requestEthValue > 0` → throw `ValidationException(400, "FundingDisabled: this instance does not accept ETH-bearing transactions")`
-- [ ] T043 [US2] Create `src/main/java/com/arcadigitalis/backend/policy/TxPayloadService.java`: `prepareActivate`, `prepareCheckIn`, `prepareRenew`, `prepareUpdateManifestUri`, `prepareRevoke`, `prepareRescue` methods; owner methods call `RoleResolver.confirmOwner()` first; status from the same live read (from `PolicyReader`) used for pre-flight 409 per FR-012d (`checkIn` → 409 on CLAIMABLE/RELEASED/REVOKED; `updateManifestUri`/`revoke` → 409 on RELEASED/REVOKED); delegates ABI encoding to `CalldataBuilder`; returns `TxPayloadResponse`
-- [ ] T044 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/api/dto/` tx records: `TxPayloadResponse(to, data, gasEstimate)`, `ActivateRequest(manifestUri, guardians, guardianQuorum, warnThreshold, inactivityThreshold)`, `CheckInRequest`, `RenewRequest(ethValue)`, `UpdateManifestRequest(newManifestUri)`, `RevokeRequest` — all immutable `record` types; validate guardian list ≤ 7 entries
-- [ ] T045 [US2] Create `src/main/java/com/arcadigitalis/backend/api/controller/TxController.java` — `POST /packages/{key}/tx/activate`: auth required; validate ≤7 guardians (400 on violation); `FundingGuard.assertFundingAllowed(ethValue)`; `TxPayloadService.prepareActivate()`; return `TxPayloadResponse`
-- [ ] T046 [US2] Add `POST /packages/{key}/tx/check-in` to `TxController.java`: auth required; `TxPayloadService.prepareCheckIn()` (pre-flight: 409 on CLAIMABLE; 409 on RELEASED/REVOKED); return `TxPayloadResponse`
-- [ ] T047 [US2] Add `POST /packages/{key}/tx/renew` to `TxController.java`: **unauthenticated** (FR-012b); `FundingGuard.assertFundingAllowed(ethValue)` if ethValue present; `TxPayloadService.prepareRenew()` — calldata returned unconditionally (no status pre-flight per FR-012d); return `TxPayloadResponse`
-- [ ] T048 [US2] Add `POST /packages/{key}/tx/update-manifest` to `TxController.java`: auth required; `TxPayloadService.prepareUpdateManifestUri()` (pre-flight: 409 on RELEASED/REVOKED); return `TxPayloadResponse`
-- [ ] T049 [US2] Add `POST /packages/{key}/tx/revoke` to `TxController.java`: auth required; `TxPayloadService.prepareRevoke()` (pre-flight: 409 on RELEASED/REVOKED); return `TxPayloadResponse`
-- [ ] T050 [US2] Add `POST /packages/{key}/tx/rescue` to `TxController.java`: **unauthenticated**, `security: []` (FR-012c); `TxPayloadService.prepareRescue()` — calldata unconditional; return `TxPayloadResponse`
-- [ ] T051 [P] [US2] Create `src/test/java/com/arcadigitalis/backend/evm/CalldataBuilderTest.java` (MANDATORY): ABI round-trip for all 11 functions — encode then decode and verify function selector matches keccak256 of function signature, and each argument is correctly encoded; no nulls; no submissions
-- [ ] T052 [P] [US2] Create `src/test/java/com/arcadigitalis/backend/policy/RoleResolverTest.java` (MANDATORY): owner confirmed on matching address; `AccessDeniedException(403)` on non-owner; guardian confirmed from on-chain list; beneficiary confirmed; cache bypass — `guardian_cache` NEVER consulted for auth decision (verified by asserting no repository call via Mockito)
-- [ ] T053 [P] [US2] Create `src/test/java/com/arcadigitalis/backend/policy/TxPayloadServiceTest.java` — owner pre-flight cases: 409 on RELEASED for `updateManifestUri`; 409 on REVOKED for `revoke`; 409 on CLAIMABLE for `checkIn`; valid ACTIVE path returns `TxPayloadResponse`; `FundingGuard` rejects ETH value when `fundingEnabled=false`; verify `CalldataBuilder` is called with correct args
-- [ ] T054 [US2] Create `src/test/java/com/arcadigitalis/backend/integration/TxPayloadIT.java`: owner tx paths for all 6 owner+rescue endpoints using Testcontainers + WireMock; verify each response contains non-empty `data` (calldata), `to` = configured proxy address; zero on-chain submissions; 409 for pre-flight triggers; 403 for non-owner
+- [ ] T042 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/evm/CalldataBuilder.java`: ABI-encode all 11 mutating contract functions using Web3j `Function` + `FunctionEncoder.encode()`: `activate(bytes32,string,address[],uint256,uint256,uint256)`, `checkIn(bytes32)`, `renew(bytes32)`, `updateManifestUri(bytes32,string)`, `guardianApprove(bytes32)`, `guardianVeto(bytes32)`, `guardianRescindVeto(bytes32)`, `guardianRescindApprove(bytes32)`, `claim(bytes32)`, `revoke(bytes32)`, `rescue(bytes32)`; return hex-encoded calldata string
+- [ ] T043 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/policy/RoleResolver.java`: `confirmOwner(packageKey, sessionAddress)` — call `PolicyReader.getPackage()`, compare ownerAddress → `AccessDeniedException(403)` on mismatch; `confirmGuardian(packageKey, sessionAddress)` — check guardian list from chain; `confirmBeneficiary(packageKey, sessionAddress)` — check on-chain beneficiary; NEVER use `guardian_cache` or `package_cache` for authorization
+- [ ] T044 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/policy/FundingGuard.java`: `assertFundingAllowed(requestEthValue)` — if `fundingEnabled=false` (from `Web3jConfig` bean) AND `requestEthValue > 0` → throw `ValidationException(400, "FundingDisabled: this instance does not accept ETH-bearing transactions")`
+- [ ] T045 [US2] Create `src/main/java/com/arcadigitalis/backend/policy/TxPayloadService.java`: `prepareActivate`, `prepareCheckIn`, `prepareRenew`, `prepareUpdateManifestUri`, `prepareRevoke`, `prepareRescue` methods; owner methods call `RoleResolver.confirmOwner()` first; status from the same live read (from `PolicyReader`) used for pre-flight 409 per FR-012d (`checkIn` → 409 on CLAIMABLE/RELEASED/REVOKED; `updateManifestUri`/`revoke` → 409 on RELEASED/REVOKED); delegates ABI encoding to `CalldataBuilder`; returns `TxPayloadResponse`
+- [ ] T046 [P] [US2] Create `src/main/java/com/arcadigitalis/backend/api/dto/` tx records: `TxPayloadResponse(to, data, gasEstimate)`, `ActivateRequest(manifestUri, guardians, guardianQuorum, warnThreshold, inactivityThreshold)`, `CheckInRequest`, `RenewRequest(ethValue)`, `UpdateManifestRequest(newManifestUri)`, `RevokeRequest` — all immutable `record` types; validate guardian list ≤ 7 entries
+- [ ] T047 [US2] Create `src/main/java/com/arcadigitalis/backend/api/controller/TxController.java` — `POST /packages/{key}/tx/activate`: auth required; validate ≤7 guardians (400 on violation); `FundingGuard.assertFundingAllowed(ethValue)`; `TxPayloadService.prepareActivate()`; return `TxPayloadResponse`
+- [ ] T048 [US2] Add `POST /packages/{key}/tx/check-in` to `TxController.java`: auth required; `TxPayloadService.prepareCheckIn()` (pre-flight: 409 on CLAIMABLE; 409 on RELEASED/REVOKED); return `TxPayloadResponse`
+- [ ] T049 [US2] Add `POST /packages/{key}/tx/renew` to `TxController.java`: **unauthenticated** (FR-012b); `FundingGuard.assertFundingAllowed(ethValue)` if ethValue present; `TxPayloadService.prepareRenew()` — calldata returned unconditionally (no status pre-flight per FR-012d); return `TxPayloadResponse`
+- [ ] T050 [US2] Add `POST /packages/{key}/tx/update-manifest` to `TxController.java`: auth required; `TxPayloadService.prepareUpdateManifestUri()` (pre-flight: 409 on RELEASED/REVOKED); return `TxPayloadResponse`
+- [ ] T051 [US2] Add `POST /packages/{key}/tx/revoke` to `TxController.java`: auth required; `TxPayloadService.prepareRevoke()` (pre-flight: 409 on RELEASED/REVOKED); return `TxPayloadResponse`
+- [ ] T052 [US2] Add `POST /packages/{key}/tx/rescue` to `TxController.java`: **unauthenticated**, `security: []` (FR-012c); `TxPayloadService.prepareRescue()` — calldata unconditional; return `TxPayloadResponse`
+- [ ] T053 [P] [US2] Create `src/test/java/com/arcadigitalis/backend/evm/CalldataBuilderTest.java` (MANDATORY): ABI round-trip for all 11 functions — encode then decode and verify function selector matches keccak256 of function signature, and each argument is correctly encoded; no nulls; no submissions
+- [ ] T054 [P] [US2] Create `src/test/java/com/arcadigitalis/backend/policy/RoleResolverTest.java` (MANDATORY): owner confirmed on matching address; `AccessDeniedException(403)` on non-owner; guardian confirmed from on-chain list; beneficiary confirmed; cache bypass — `guardian_cache` NEVER consulted for auth decision (verified by asserting no repository call via Mockito)
+- [ ] T055 [P] [US2] Create `src/test/java/com/arcadigitalis/backend/policy/TxPayloadServiceTest.java` — owner pre-flight cases: 409 on RELEASED for `updateManifestUri`; 409 on REVOKED for `revoke`; 409 on CLAIMABLE for `checkIn`; valid ACTIVE path returns `TxPayloadResponse`; `FundingGuard` rejects ETH value when `fundingEnabled=false`; verify `CalldataBuilder` is called with correct args
+- [ ] T056 [US2] Create `src/test/java/com/arcadigitalis/backend/integration/TxPayloadIT.java`: owner tx paths for all 6 owner+rescue endpoints using Testcontainers + WireMock; verify each response contains non-empty `data` (calldata), `to` = configured proxy address; zero on-chain submissions; 409 for pre-flight triggers; 403 for non-owner
 
 **Checkpoint**: User Story 2 independently testable — owner lifecycle payloads complete
 
@@ -128,13 +128,13 @@ REVOKED) returns 409.
 a guardian wallet session; sign and submit; verify on-chain guardian state. Verify 403 from non-guardian.
 Verify 409 for non-`PENDING_RELEASE` status.
 
-- [ ] T055 [US3] Add `prepareGuardianApprove`, `prepareGuardianVeto`, `prepareGuardianRescindVeto`, `prepareGuardianRescindApprove` to `src/main/java/com/arcadigitalis/backend/policy/TxPayloadService.java`: each calls `RoleResolver.confirmGuardian()` first; status from same live read used for pre-flight 409 (status != PENDING_RELEASE → 409 `NotPending()`; status == RELEASED/REVOKED → 409); delegate to `CalldataBuilder`
-- [ ] T056 [US3] Add `POST /packages/{key}/tx/guardian-approve` to `src/main/java/com/arcadigitalis/backend/api/controller/TxController.java`: auth required; `TxPayloadService.prepareGuardianApprove()`; 409 on wrong status; 403 on non-guardian
-- [ ] T057 [US3] Add `POST /packages/{key}/tx/guardian-veto` to `TxController.java`: auth required; `TxPayloadService.prepareGuardianVeto()`; 409 on wrong status; 403 on non-guardian
-- [ ] T058 [US3] Add `POST /packages/{key}/tx/guardian-rescind-veto` to `TxController.java`: auth required; `TxPayloadService.prepareGuardianRescindVeto()`; 409 on wrong status; 403 on non-guardian
-- [ ] T059 [US3] Add `POST /packages/{key}/tx/guardian-rescind-approve` to `TxController.java`: auth required; `TxPayloadService.prepareGuardianRescindApprove()`; 409 on wrong status; 403 on non-guardian
-- [ ] T060 [P] [US3] Add guardian pre-flight test cases to `src/test/java/com/arcadigitalis/backend/policy/TxPayloadServiceTest.java`: 409 for non-PENDING_RELEASE on approve; 409 for RELEASED/REVOKED on veto; 403 for non-guardian on each operation; valid guardian path returns `TxPayloadResponse`
-- [ ] T061 [US3] Add guardian paths to `src/test/java/com/arcadigitalis/backend/integration/TxPayloadIT.java`: 4 guardian endpoints return unsigned calldata; 403 for non-guardian; 409 for ACTIVE/RELEASED/REVOKED status on approve endpoint; valid PENDING_RELEASE path succeeds
+- [ ] T057 [US3] Add `prepareGuardianApprove`, `prepareGuardianVeto`, `prepareGuardianRescindVeto`, `prepareGuardianRescindApprove` to `src/main/java/com/arcadigitalis/backend/policy/TxPayloadService.java`: each calls `RoleResolver.confirmGuardian()` first; status from same live read used for pre-flight 409 (status != PENDING_RELEASE → 409 `NotPending()`; status == RELEASED/REVOKED → 409); delegate to `CalldataBuilder`
+- [ ] T058 [US3] Add `POST /packages/{key}/tx/guardian-approve` to `src/main/java/com/arcadigitalis/backend/api/controller/TxController.java`: auth required; `TxPayloadService.prepareGuardianApprove()`; 409 on wrong status; 403 on non-guardian
+- [ ] T059 [US3] Add `POST /packages/{key}/tx/guardian-veto` to `TxController.java`: auth required; `TxPayloadService.prepareGuardianVeto()`; 409 on wrong status; 403 on non-guardian
+- [ ] T060 [US3] Add `POST /packages/{key}/tx/guardian-rescind-veto` to `TxController.java`: auth required; `TxPayloadService.prepareGuardianRescindVeto()`; 409 on wrong status; 403 on non-guardian
+- [ ] T061 [US3] Add `POST /packages/{key}/tx/guardian-rescind-approve` to `TxController.java`: auth required; `TxPayloadService.prepareGuardianRescindApprove()`; 409 on wrong status; 403 on non-guardian
+- [ ] T062 [P] [US3] Add guardian pre-flight test cases to `src/test/java/com/arcadigitalis/backend/policy/TxPayloadServiceTest.java`: 409 for non-PENDING_RELEASE on approve; 409 for RELEASED/REVOKED on veto; 403 for non-guardian on each operation; valid guardian path returns `TxPayloadResponse`
+- [ ] T063 [US3] Add guardian paths to `src/test/java/com/arcadigitalis/backend/integration/TxPayloadIT.java`: 4 guardian endpoints return unsigned calldata; 403 for non-guardian; 409 for ACTIVE/RELEASED/REVOKED status on approve endpoint; valid PENDING_RELEASE path succeeds
 
 **Checkpoint**: User Story 3 independently testable — guardian workflow payloads complete
 
@@ -150,13 +150,13 @@ stale. A claim tx payload is available for CLAIMABLE packages; 409 for non-CLAIM
 with an empty DB; verify all required fields present and matching chain state. Verify claim payload
 returns 409 for PENDING_RELEASE. Verify recovery-kit works unauthenticated.
 
-- [ ] T062 [P] [US4] Add `getRecoveryKit(packageKey)` to `src/main/java/com/arcadigitalis/backend/policy/PackageService.java`: live chain read via `PolicyReader.getPackage()` as primary; DB cache as performance hint only; returns `RecoveryKitResponse` even when DB has no row for the package (FR-016); non-RELEASED packages return response with current status and available identifying data (no error)
-- [ ] T063 [P] [US4] Create `src/main/java/com/arcadigitalis/backend/api/dto/RecoveryKitResponse.java`: a `record` carrying `chainId`, `proxyAddress`, `packageKey`, `manifestUri`, `releasedAt`, `accCondition` (full ACC JSON string), `beneficiaryAddress`, `currentStatus`
-- [ ] T064 [US4] Add `GET /packages/{packageKey}/recovery-kit` to `src/main/java/com/arcadigitalis/backend/api/controller/PackageController.java`: **unauthenticated** (FR-010); call `PackageService.getRecoveryKit()`; `503` on RPC unavailable; live chain read always performed
-- [ ] T065 [US4] Add `prepareClaimTx(packageKey, sessionAddress)` to `src/main/java/com/arcadigitalis/backend/policy/TxPayloadService.java`: `RoleResolver.confirmBeneficiary()` first; live status read — 409 if status != CLAIMABLE (FR-017a) with current status in error body; delegate to `CalldataBuilder.encodeClaim()`
-- [ ] T066 [US4] Add `POST /packages/{key}/tx/claim` to `src/main/java/com/arcadigitalis/backend/api/controller/TxController.java`: auth required; `TxPayloadService.prepareClaimTx()`; 409 on non-CLAIMABLE; 403 on non-beneficiary; return `TxPayloadResponse`
-- [ ] T067 [P] [US4] Add claim pre-flight cases to `src/test/java/com/arcadigitalis/backend/policy/TxPayloadServiceTest.java`: 409 for PENDING_RELEASE; 409 for ACTIVE; 409 for RELEASED (already claimed); 403 for non-beneficiary; valid CLAIMABLE path returns `TxPayloadResponse`
-- [ ] T068 [US4] Add recovery-kit + claim paths to `src/test/java/com/arcadigitalis/backend/integration/TxPayloadIT.java`: recovery-kit returns all 8 required fields; claim 409 on PENDING_RELEASE; recovery-kit works with empty DB (live chain fallback verified); unauthenticated access succeeds for recovery-kit
+- [ ] T064 [P] [US4] Add `getRecoveryKit(packageKey)` to `src/main/java/com/arcadigitalis/backend/policy/PackageService.java`: live chain read via `PolicyReader.getPackage()` as primary; DB cache as performance hint only; returns `RecoveryKitResponse` even when DB has no row for the package (FR-016); non-RELEASED packages return response with current status and available identifying data (no error)
+- [ ] T065 [P] [US4] Create `src/main/java/com/arcadigitalis/backend/api/dto/RecoveryKitResponse.java`: a `record` carrying `chainId`, `proxyAddress`, `packageKey`, `manifestUri`, `releasedAt`, `accCondition` (full ACC JSON string from `AccTemplateBuilder`), `beneficiaryAddress`, `currentStatus`
+- [ ] T066 [US4] Add `GET /packages/{packageKey}/recovery-kit` to `src/main/java/com/arcadigitalis/backend/api/controller/PackageController.java`: **unauthenticated** (FR-010); call `PackageService.getRecoveryKit()`; `503` on RPC unavailable; live chain read always performed
+- [ ] T067 [US4] Add `prepareClaimTx(packageKey, sessionAddress)` to `src/main/java/com/arcadigitalis/backend/policy/TxPayloadService.java`: `RoleResolver.confirmBeneficiary()` first; live status read — 409 if status != CLAIMABLE (FR-017a) with current status in error body; delegate to `CalldataBuilder.encodeClaim()`
+- [ ] T068 [US4] Add `POST /packages/{key}/tx/claim` to `src/main/java/com/arcadigitalis/backend/api/controller/TxController.java`: auth required; `TxPayloadService.prepareClaimTx()`; 409 on non-CLAIMABLE; 403 on non-beneficiary; return `TxPayloadResponse`
+- [ ] T069 [P] [US4] Add claim pre-flight cases to `src/test/java/com/arcadigitalis/backend/policy/TxPayloadServiceTest.java`: 409 for PENDING_RELEASE; 409 for ACTIVE; 409 for RELEASED (already claimed); 403 for non-beneficiary; valid CLAIMABLE path returns `TxPayloadResponse`
+- [ ] T070 [US4] Add recovery-kit + claim paths to `src/test/java/com/arcadigitalis/backend/integration/TxPayloadIT.java`: recovery-kit returns all 8 required fields; claim 409 on PENDING_RELEASE; recovery-kit works with empty DB (live chain fallback verified); unauthenticated access succeeds for recovery-kit
 
 **Checkpoint**: User Story 4 independently testable — beneficiary recovery path complete
 
@@ -261,7 +261,7 @@ Cuts across all user stories.
 - **Phase 3 (US1, P1)**: Depends on Phase 2 — **MVP entry point**
 - **Phase 4 (US2, P2)**: Depends on **Phase 2 and T030** (`PolicyReader`, Phase 3) — T030 MUST be complete before Phase 4 begins
 - **Phase 5 (US3, P3)**: Depends on Phase 4 (extends `TxPayloadService` + `TxController`)
-- **Phase 6 (US4, P4)**: Depends on Phase 3 (extends `PackageService` + `PackageController`; `AccTemplateBuilder`/`ChainNameRegistry` T069–T070 are in Phase 3)
+- **Phase 6 (US4, P4)**: Depends on Phase 3 (extends `PackageService` + `PackageController`; `AccTemplateBuilder`/`ChainNameRegistry` T040–T041 are in Phase 3)
 - **Phase 7 (US5, P5)**: Depends on Phase 2 + Phase 3 (`PolicyReader` in ManifestValidator layer 2)
 - **Phase 8 (US6, P6)**: Depends on Phase 2 (persistence layer only)
 - **Phase 9 (US7, P7)**: Depends on Phase 2 + Phase 3 (`PolicyReader`); enhances `PackageService`
@@ -274,7 +274,7 @@ Cuts across all user stories.
 | US1 (P1) | Foundational only | ✅ Yes — auth + status read |
 | US2 (P2) | Foundational + `PolicyReader` (T030 from US1) | ✅ Yes — owner payloads |
 | US3 (P3) | US2 (`TxPayloadService`, `TxController` skeleton) | ✅ Yes — guardian endpoints |
-| US4 (P4) | Foundational + `PolicyReader`/`PackageService` + `AccTemplateBuilder` (T069–T070, Phase 3) | ✅ Yes — recovery kit |
+| US4 (P4) | Foundational + `PolicyReader`/`PackageService` + `AccTemplateBuilder` (T040–T041, Phase 3) | ✅ Yes — recovery kit |
 | US5 (P5) | Foundational + `PolicyReader` (US1) | ✅ Yes — Lit ACC + validation |
 | US6 (P6) | Foundational + persistence only | ✅ Yes — storage endpoints |
 | US7 (P7) | Foundational + `PolicyReader`/cache entities | ✅ Yes — indexer + events |
@@ -290,7 +290,7 @@ Cuts across all user stories.
 - All Phase 1 tasks marked `[P]` run in parallel (T002–T007)
 - All foundational migration files (T008–T015) run in parallel after T008
 - Within US1: `SiweParser` (T024), `NonceService` (T025), `PolicyReader` (T030), auth DTOs (T028), package DTOs (T032, T033) all run in parallel
-- Within US2: `CalldataBuilder` (T040), `RoleResolver` (T041), `FundingGuard` (T042), tx DTOs (T044) run in parallel
+- Within US2: `CalldataBuilder` (T042), `RoleResolver` (T043), `FundingGuard` (T044), tx DTOs (T046) run in parallel
 - Within US7: `EventDecoder` (T081), `ReorgHandler` (T082) run in parallel before `IndexerPoller` (T083)
 
 ---
@@ -305,6 +305,8 @@ Task T028: auth DTOs (NonceRequest, NonceResponse, VerifyRequest, VerifyResponse
 Task T030: PolicyReader.java
 Task T032: PackageStatusResponse.java
 Task T033: ConfigResponse.java
+Task T040: ChainNameRegistry.java
+Task T041: AccTemplateBuilder.java
 
 # Phase B — After T024+T025 complete:
 Task T026: SiweVerifier.java (needs SiweParser + NonceService)
@@ -332,7 +334,7 @@ Task T039: AuthFlowIT.java (integration)
 
 1. Complete **Phase 1**: Setup (T001–T007)
 2. Complete **Phase 2**: Foundational (T008–T023) — critical blocker
-3. Complete **Phase 3**: User Story 1 (T024–T039) — auth + package status
+3. Complete **Phase 3**: User Story 1 + Lit utilities (T024–T041) — auth + package status + AccTemplateBuilder
 4. **STOP and VALIDATE**: run `AuthFlowIT.java`; test against testnet
 5. Deploy/demo if ready — this is the minimal deployable increment
 
@@ -356,10 +358,10 @@ Task T039: AuthFlowIT.java (integration)
 |---|---|---|
 | Phase 1 | T001–T007 | Setup (7 tasks) |
 | Phase 2 | T008–T023 | Foundational / DB / security (16 tasks) |
-| Phase 3 | T024–T039, T069–T070 | US1 Auth + Package Status + Lit utilities (18 tasks) |
-| Phase 4 | T040–T054 | US2 Owner Lifecycle (15 tasks) |
-| Phase 5 | T055–T061 | US3 Guardian Workflow (7 tasks) |
-| Phase 6 | T062–T068 | US4 Beneficiary Recovery (7 tasks) |
+| Phase 3 | T024–T041 | US1 Auth + Package Status + Lit utilities (18 tasks) |
+| Phase 4 | T042–T056 | US2 Owner Lifecycle (15 tasks) |
+| Phase 5 | T057–T063 | US3 Guardian Workflow (7 tasks) |
+| Phase 6 | T064–T070 | US4 Beneficiary Recovery (7 tasks) |
 | Phase 7 | T071–T075 | US5 Manifest Validation (5 tasks) |
 | Phase 8 | T076–T080 | US6 Artifact Storage (5 tasks) |
 | Phase 9 | T081–T095 | US7 Event Indexing + Notifications (15 tasks) |
