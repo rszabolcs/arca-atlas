@@ -348,12 +348,19 @@ complete.
 - **FR-002**: The service MUST verify a Sign-In With Ethereum (SIWE / EIP-4361) signed message
   against the issued nonce, the claimed address, and the configured service domain before issuing
   a session token. The `domain` field in the signed message MUST exactly match the value of
-  `ARCA_SIWE_DOMAIN`; a mismatch MUST be rejected with HTTP 401.
+  `ARCA_SIWE_DOMAIN`; a mismatch MUST be rejected with HTTP 401. See FR-002a for cross-origin
+  replay context.
 - **FR-002a**: The service MUST reject SIWE verification attempts where the signed message `domain`
   does not exactly match `ARCA_SIWE_DOMAIN`, preventing cross-origin replay of signed messages.
+  *(Preserved as a named reference for test traceability; see FR-002 for the primary
+  domain-match requirement.)*
 - **FR-003**: The service MUST reject replayed SIWE signatures (nonce already consumed).
 - **FR-004**: The service MUST issue session tokens with a configurable short lifetime; expired
-  tokens MUST be rejected on all protected endpoints.
+  tokens MUST be rejected on all protected endpoints. Each token MUST carry a unique `jti`
+  (JWT ID) claim; the service MUST maintain a store of seen `jti` values (keyed by jti, TTL =
+  token expiry) and reject with HTTP 401 any token whose `jti` is already present in the store,
+  preventing replay of intercepted tokens within their TTL window. MVP implementation: in-memory
+  `ConcurrentHashMap<jti, expiresAt>` with scheduled TTL-pruning is sufficient.
 
 **Authorization**
 
@@ -397,10 +404,6 @@ complete.
 - **FR-012c**: The `rescue` payload endpoint is **unauthenticated** at the backend level; the
   contract enforces `NotAuthorized()` if the caller is not the stored upgrade authority. The
   backend only encodes `rescue(packageKey)` calldata; access control is fully on-chain.
-- **FR-012a**: The `checkIn` payload endpoint MUST perform a live chain status read before
-  returning a payload; if the package status is `CLAIMABLE`, the endpoint MUST return HTTP 409
-  with a clear error message rather than a payload that will revert on-chain with
-  `AlreadyClaimable()`.
 - **FR-012b**: The `renew` payload endpoint is **unauthenticated**; any caller (including
   unauthenticated anonymous callers) MUST be able to request the unsigned `renew()` calldata.
   The contract enforces no access control on `renew()` — it is a pure ETH-payment extension
@@ -411,7 +414,7 @@ complete.
   MUST be added to an endpoint solely for pre-flight. Specifically:
   - Owner endpoints (`checkIn`, `updateManifestUri`, `revoke`) MUST return 409 when status is
     `RELEASED` or `REVOKED` (the live owner-auth read already provides the status).
-  - `checkIn` additionally MUST return 409 when status is `CLAIMABLE` (FR-012a).
+  - `checkIn` additionally MUST return 409 when status is `CLAIMABLE` (this sub-rule was previously the standalone FR-012a, now merged here per analysis session 2026-02-26).
   - Guardian endpoints (`guardianApprove`, `guardianVeto`, `guardianRescindVeto`,
     `guardianRescindApprove`) MUST return 409 when status is not `PENDING_RELEASE` (`NotPending()`)
     or when status is `RELEASED` or `REVOKED` (the live guardian-auth read already provides status).
@@ -469,7 +472,9 @@ complete.
   one configured storage backend (IPFS gateway and/or object storage).
 - **FR-023**: Before confirming storage, the service MUST verify the sha256 hash of the ciphertext
   blob against the hash declared in the manifest; mismatches MUST result in HTTP 422.
-- **FR-024**: The service MUST provide retrieval of stored artifacts by their storage URI.
+- **FR-024**: The service MUST provide retrieval of stored artifacts by their internal artifact
+  ID (UUID); the response MUST include all confirmed storage URIs (`ipfs_uri`, `s3_uri`) so
+  callers can resolve content directly from storage backends if needed.
 - **FR-025**: The service MUST NOT attempt to decrypt or inspect either the manifest (treat its
   Lit fields as opaque) or the ciphertext content.
 
@@ -536,7 +541,10 @@ complete.
 - **NFR-002**: The event indexer MUST run as a single goroutine/thread within the service
   process. Multiple concurrent indexer instances MUST NOT run against the same database; the
   idempotency guarantee (FR-029) is the safety net for accidental overlap, not the intended
-  operating mode.
+  operating mode. The service MUST enforce singleton indexer startup via a PostgreSQL advisory
+  lock (`pg_try_advisory_lock`): if the lock cannot be acquired, the indexer thread MUST NOT
+  start and MUST log a clear warning. The indexer MUST be disableable via
+  `ARCA_INDEXER_ENABLED=false` for API-only deployments.
 - **NFR-003**: The service MUST be horizontally scalable in a future phase without architectural
   redesign: all mutable state lives exclusively in the PostgreSQL database; no in-process shared
   state is required between instances. API instances may be load-balanced freely; the indexer
@@ -624,7 +632,9 @@ complete.
 
 - **SC-006**: Paginated queries for packages associated with a given address return results at
   **p95 ≤ 500 ms** at a dataset size of at least one million packages, without on-chain
-  enumeration. Verified by a load test against a seeded local database.
+  enumeration. Verified by a load test against a seeded local database. *Load test execution
+  is deferred to a post-MVP performance sprint; DB index correctness (V8 migrations, NFR-006)
+  is validated by seeded query tests in Phase 10. Revisit when production data volumes mandate.*
 
 - **SC-007**: A notification delivery failure for one package does not produce any error response
   on any API endpoint and does not stall the event indexer. Verified by injecting delivery

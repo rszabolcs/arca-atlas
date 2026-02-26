@@ -152,8 +152,8 @@ extensible; current supported values are `email`, `webhook`.
 | `package_key` | `VARCHAR(66)` NOT NULL | |
 | `subscriber_address` | `VARCHAR(42)` NOT NULL | registered by this address |
 | `event_types` | `VARCHAR(40)[]` NOT NULL | array: subset of event_type values from `event_records` |
-| `channel_type` | `VARCHAR(20)` NOT NULL | `email` \| `webhook` |
-| `channel_value` | `TEXT` NOT NULL | email address or webhook URL |
+| `channel_type` | `VARCHAR(20)` NOT NULL | `email` \| `webhook` \| `push` |
+| `channel_value` | `TEXT` NOT NULL | email address, webhook URL (`https://`), or FCM/APNs push token |
 | `active` | `BOOLEAN` NOT NULL DEFAULT true | |
 | `created_at` | `TIMESTAMPTZ` NOT NULL | |
 | `last_delivery_attempt` | `TIMESTAMPTZ` | |
@@ -192,8 +192,8 @@ processed_blocks ─── independent; keyed by (chain_id, proxy_address, block
 | `event_records` | `event_type` | one of the 13 named event types |
 | `stored_artifacts` | `sha256_hash` | `0x` + 64 hex chars |
 | `stored_artifacts` | `artifact_type` | `manifest` or `ciphertext` |
-| `notification_targets` | `channel_type` | `email` or `webhook` |
-| `notification_targets` | `channel_value` | valid email format (if `email`) or valid URL `https://` (if `webhook`) |
+| `notification_targets` | `channel_type` | `email`, `webhook`, or `push` |
+| `notification_targets` | `channel_value` | valid email format (if `email`); valid URL `https://` (if `webhook`); non-empty string (if `push` — device token format is platform-specific) |
 
 ---
 

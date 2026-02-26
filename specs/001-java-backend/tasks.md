@@ -22,7 +22,7 @@ No user-story work can begin before this phase is complete.
 - [ ] T002 [P] Configure `pom.xml` with all required dependencies: `spring-boot-starter-web`, `spring-boot-starter-data-jpa`, `spring-boot-starter-security`, `web3j-spring-boot-starter` (4.x), `jjwt-api/impl/jackson` (0.12+), `flyway-core` (10.x), `springdoc-openapi-starter-webmvc-ui` (2.x), `testcontainers:postgresql`, `wiremock`, `assertj-core`, `junit-jupiter`
 - [ ] T003 [P] Create main source tree skeleton: directories for `api/controller/`, `api/dto/`, `api/exception/`, `auth/`, `evm/`, `policy/`, `lit/`, `storage/`, `persistence/entity/`, `persistence/repository/`, `persistence/migration/`, `notifications/` under `src/main/java/com/arcadigitalis/backend/`
 - [ ] T004 [P] Create test source tree skeleton: directories for `auth/`, `evm/`, `policy/`, `lit/`, `integration/`, `security/` under `src/test/java/com/arcadigitalis/backend/`
-- [ ] T005 [P] Create `src/main/resources/application.yml` declaring all required env-var bindings: `ARCA_EVM_RPC_URL`, `ARCA_POLICY_PROXY_ADDRESS`, `ARCA_EVM_CHAIN_ID`, `ARCA_JWT_SECRET`, `ARCA_JWT_TTL_SECONDS` (default 3600), `ARCA_SIWE_DOMAIN`, `ARCA_INDEXER_START_BLOCK`, `ARCA_INDEXER_CONFIRMATION_DEPTH` (default 12), `ARCA_INDEXER_POLL_INTERVAL_SECONDS` (default 15)
+- [ ] T005 [P] Create `src/main/resources/application.yml` declaring all required env-var bindings: `ARCA_EVM_RPC_URL`, `ARCA_POLICY_PROXY_ADDRESS`, `ARCA_EVM_CHAIN_ID`, `ARCA_JWT_SECRET`, `ARCA_JWT_TTL_SECONDS` (default 3600), `ARCA_SIWE_DOMAIN`, `ARCA_INDEXER_START_BLOCK`, `ARCA_INDEXER_CONFIRMATION_DEPTH` (default 12), `ARCA_INDEXER_POLL_INTERVAL_SECONDS` (default 15), `ARCA_INDEXER_ENABLED` (default true), `ARCA_INDEXER_LOCK_ID` (default derived from proxy address hash)
 - [ ] T006 [P] Create `docker-compose.yml` for local dev: PostgreSQL 15+ service (port 5432, named `arcadb`), backend service with all env-var placeholders sourced from `.env`; create `.env.example` matching `quickstart.md` template
 - [ ] T007 Commit `./mvnw` and `./mvnw.cmd` Maven wrapper scripts to repository root; verify `./mvnw clean compile` succeeds on a clean checkout
 
@@ -37,7 +37,7 @@ endpoints that ALL user stories depend on. **No user story work begins until thi
 
 - [ ] T008 Create `src/main/resources/db/migration/V1__create_nonces.sql`: `nonces` table (id UUID PK, wallet_address VARCHAR(42) NOT NULL, nonce VARCHAR(64) UNIQUE NOT NULL, created_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, consumed BOOLEAN NOT NULL DEFAULT false); unique index on `nonce`; partial index on `(wallet_address, consumed=false)`
 - [ ] T009 [P] Create `V2__create_package_cache.sql`: `package_cache` table (all columns per data-model.md §1.2 incl. last_check_in, paid_until); unique constraint `(chain_id, proxy_address, package_key)`; indexes on `owner_address`, `beneficiary_address`
-- [ ] T010 [P] Create `V3__create_guardian_cache.sql`: `guardian_cache` table (id UUID PK, package_cache_id UUID FK → package_cache(id) CASCADE DELETE, guardian_address VARCHAR(42) NOT NULL, position SMALLINT NOT NULL); unique constraint `(package_cache_id, guardian_address)`
+- [ ] T010 [P] Create `V3__create_guardian_cache.sql`: `guardian_cache` table (id UUID PK, package_cache_id UUID FK → package_cache(id) CASCADE DELETE, guardian_address VARCHAR(42) NOT NULL, position SMALLINT NOT NULL); unique constraint `(package_cache_id, guardian_address)` — *[P] applies to file authoring; Flyway applies migrations in version-ascending order, so V3 always executes after V2 regardless of authoring parallelism*
 - [ ] T011 [P] Create `V4__create_event_records.sql`: `event_records` table (all columns per data-model.md §1.4 incl. raw_data JSONB, block_hash VARCHAR(66)); unique constraint `(tx_hash, log_index)` for idempotency; indexes on `(chain_id, proxy_address, package_key, block_number)`, `emitting_address`, `block_timestamp`, `event_type`
 - [ ] T012 [P] Create `V5__create_processed_blocks.sql`: `processed_blocks` table (id BIGSERIAL PK, chain_id BIGINT NOT NULL, proxy_address VARCHAR(42) NOT NULL, block_number BIGINT NOT NULL, block_hash VARCHAR(66) NOT NULL); unique constraint `(chain_id, proxy_address, block_number)`; index on `(chain_id, proxy_address, block_number DESC)`
 - [ ] T013 [P] Create `V6__create_stored_artifacts.sql`: `stored_artifacts` table (all columns per data-model.md §1.6 incl. ipfs_uri, s3_uri, storage_confirmed_at); unique constraint `(sha256_hash)`; index on `(chain_id, proxy_address, package_key, artifact_type)`
@@ -68,7 +68,7 @@ Verify live `REVOKED` overrides a stale `ACTIVE` in the cache. Verify `DRAFT` fo
 - [ ] T024 [P] [US1] Create `src/main/java/com/arcadigitalis/backend/auth/SiweParser.java`: line-by-line EIP-4361 parser extracting `domain`, `address`, `statement`, `uri`, `nonce`, `issuedAt`, `expirationTime`; `ParseException` on malformed input
 - [ ] T025 [P] [US1] Create `src/main/java/com/arcadigitalis/backend/auth/NonceService.java`: `issueNonce(walletAddress)` — INSERT nonce row in single DB tx; `consumeNonce(walletAddress, nonce)` — atomic read-and-mark-consumed; `AuthException(401)` if nonce not found, expired (`now > expires_at`), or already consumed
 - [ ] T026 [US1] Create `src/main/java/com/arcadigitalis/backend/auth/SiweVerifier.java`: verify SIWE message using `SiweParser` + Web3j `Sign.signedMessageToKey` (ecrecover); enforce: `domain` exact-match vs `ARCA_SIWE_DOMAIN` → `AuthException(401)` on mismatch; nonce single-use via `NonceService.consumeNonce`; expiry check; address match
-- [ ] T027 [US1] Create `src/main/java/com/arcadigitalis/backend/auth/JwtService.java`: `issueToken(walletAddress)` — HS256 JWT with `sub`=wallet, `jti`=UUID, `iat`=now, `exp`=now+`ARCA_JWT_TTL_SECONDS`; `verifyToken(token)` — signature + expiry; `AuthException(401)` on any failure; no jti blocklist at MVP (TTL is the expiry mechanism)
+- [ ] T027 [US1] Create `src/main/java/com/arcadigitalis/backend/auth/JwtService.java`: `issueToken(walletAddress)` — HS256 JWT with `sub`=wallet, `jti`=UUID, `iat`=now, `exp`=now+`ARCA_JWT_TTL_SECONDS`; `verifyToken(token)` — signature + expiry + jti replay check; maintain an in-memory `ConcurrentHashMap<jti, expiresAt>` (MVP); on each `verifyToken()` reject with `AuthException(401)` if `jti` already present, then record it with its expiry; schedule a periodic TTL-pruning task to evict entries past their expiry; `AuthException(401)` on any failure (FR-004, SC-008)
 - [ ] T028 [P] [US1] Create `src/main/java/com/arcadigitalis/backend/api/dto/` auth records: `NonceRequest(walletAddress)`, `NonceResponse(nonce, expiresAt)`, `VerifyRequest(walletAddress, signedMessage)`, `VerifyResponse(sessionToken, expiresAt)` — all `record` types (immutable)
 - [ ] T029 [US1] Create `src/main/java/com/arcadigitalis/backend/api/controller/AuthController.java`: `POST /auth/nonce` → `NonceService.issueNonce()`; `POST /auth/verify` → `SiweVerifier.verify()` + `JwtService.issueToken()`; both endpoints in public security chain
 - [ ] T030 [P] [US1] Create `src/main/java/com/arcadigitalis/backend/evm/PolicyReader.java`: `getPackageStatus(packageKey)` → live `eth_call` to `getPackageStatus(bytes32)` on proxy; `getPackage(packageKey)` → live `eth_call` to `getPackage(bytes32)` returning full `PackageView` struct; `isReleased(packageKey)` → live `eth_call`; `RpcUnavailableException` on connection failure
@@ -239,10 +239,16 @@ Cuts across all user stories.
 
 - [ ] T096 Create `src/test/java/com/arcadigitalis/backend/security/SecretLogScanTest.java` (MANDATORY per SC-003): exercise all API endpoints with payloads containing synthetic secret-pattern values; assert no log line (Logback appender capture) and no response body contains substrings matching patterns: `privateKey`, `rawDek`, `encryptedKey` raw value, `seedPhrase`; also scan DB `event_records.raw_data` for secret-pattern fields; FR-034 + FR-035
 - [ ] T097 [P] Add HTTP 400 input validation for `proxyAddress` + `chainId` mismatch against configured values (NFR-007) to `GlobalExceptionHandler.java` and a new `ConfigGuard.java` `@Component` invoked at controller entry; test: wrong `proxyAddress` → 400 with `"proxyAddress does not match configured proxy"` message
-- [ ] T098 [P] Add `X-Data-Staleness-Seconds` response header to all cached-data read endpoints (`GET /packages/{key}/status` serving from DB cache, `GET /events`, `GET /artifacts/{id}`) — value = seconds since `IndexerPoller` last successful sync; expose last-sync timestamp as `@ApplicationScope` bean updated by indexer
+- [ ] T098 [P] Add `X-Data-Staleness-Seconds` response header to cached live-state read endpoints (`GET /packages/{key}/status` when served from DB cache, `GET /events`) — value = seconds since `IndexerPoller` last successful sync; expose last-sync timestamp as `@ApplicationScope` bean updated by indexer; MUST NOT be added to immutable content-addressed endpoints such as `GET /artifacts/{id}`
 - [ ] T099 [P] Add HTTP 503 handling for `RpcUnavailableException` on all auth-gated endpoints performing live RPC reads (guardian verification, beneficiary validation, notification-target registration) in `GlobalExceptionHandler.java`; add `GET /health/ready` dependency on RPC reachability check
 - [ ] T100 [P] Configure SpringDoc OpenAPI 2.x in `src/main/java/com/arcadigitalis/backend/api/` to align generated schema with `contracts/openapi.yaml`: all `operationId` values, response codes (including 409 on 6 endpoints), security schemes (`bearerAuth`), and `PackageStatus` schema with all 15 fields; add `@Operation` and `@ApiResponse` annotations to all controllers
 - [ ] T101 Run end-to-end quickstart validation per `quickstart.md`: local Docker Compose up → all 7 user-story acceptance scenarios passing against the running service; fix any deviations discovered
+- [ ] T102 [P] Create `docs/recovery-drill.sh`: self-contained offline beneficiary recovery script using only `cast` (Foundry) / `ethers.js` CLI — reads `packageKey` + `manifestUri` from chain via configured RPC, fetches manifest from IPFS, constructs the Lit ACC locally; add an automated smoke test asserting the script completes correctly with the backend process stopped (SC-001)
+- [ ] T103 [P] Create `src/main/java/com/arcadigitalis/backend/notifications/PushDelivery.java`: FCM/APNs push adapter; `send(target, eventPayload)` — compose push notification from event data; configurable credentials via env; throw `DeliveryException` on failure; integrate with `NotificationDispatcher` and `RetryPolicy` (FR-031b)
+- [ ] T104 Update `NotificationTargetEntity.java` push channel support: extend `channel_type` accepted values to include `push`; add JPA validation asserting `channel_type` ∈ `{email, webhook, push}`; add `channel_value` format guard (non-empty for `push`, valid URL for `webhook`, valid email for `email`); no migration DDL change required (`channel_type VARCHAR(20)` already accommodates the value; update V7 migration comment to document all three values)
+- [ ] T105 [P] Add PostgreSQL advisory lock to `src/main/java/com/arcadigitalis/backend/evm/IndexerPoller.java` startup: check `ARCA_INDEXER_ENABLED` first (skip indexer entirely if `false`); acquire `pg_try_advisory_lock(ARCA_INDEXER_LOCK_ID)` — if not acquired log `WARN "Indexer advisory lock held by another instance — skipping indexer startup"` and return without scheduling the poll; add unit test asserting second-instance lock contention skips the poll thread (NFR-002)
+- [ ] T106 [P] Queue PATCH amendment to `.specify/memory/constitution.md` per governance procedure: add `updateManifestUri`, `guardianRescindApprove`, `rescue` to Principle IV covered-operations list; bump version `1.0.0 → 1.0.1`; update `LAST_AMENDED_DATE`; prepend Sync Impact Report — submit as a dedicated PR per amendment procedure (A1)
+- [ ] T107 [P] Add `src/test/java/com/arcadigitalis/backend/ArchitectureTest.java`: ArchUnit assertions — (1) `api` package has zero imports from `persistence` package (Constitution Quality Bar); (2) no `static` mutable fields in service-layer classes across `policy`, `evm`, `storage`, `notifications` modules (NFR-003 horizontal-scale invariant); run as part of standard Maven test phase via JUnit 5 `@AnalyzeClasses`
 
 ---
 
@@ -253,7 +259,7 @@ Cuts across all user stories.
 - **Phase 1 (Setup)**: No dependencies — start immediately
 - **Phase 2 (Foundational)**: Depends on Phase 1 — **BLOCKS all user story phases**
 - **Phase 3 (US1, P1)**: Depends on Phase 2 — **MVP entry point**
-- **Phase 4 (US2, P2)**: Depends on Phase 2; reuses `PolicyReader` from Phase 3 (T030)
+- **Phase 4 (US2, P2)**: Depends on **Phase 2 and T030** (`PolicyReader`, Phase 3) — T030 MUST be complete before Phase 4 begins
 - **Phase 5 (US3, P3)**: Depends on Phase 4 (extends `TxPayloadService` + `TxController`)
 - **Phase 6 (US4, P4)**: Depends on Phase 3 (extends `PackageService` + `PackageController`)
 - **Phase 7 (US5, P5)**: Depends on Phase 2 + Phase 3 (`PolicyReader` in ManifestValidator layer 2)
@@ -357,8 +363,8 @@ Task T039: AuthFlowIT.java (integration)
 | Phase 7 | T069–T075 | US5 Lit ACC + Manifest Validation (7 tasks) |
 | Phase 8 | T076–T080 | US6 Artifact Storage (5 tasks) |
 | Phase 9 | T081–T095 | US7 Event Indexing + Notifications (15 tasks) |
-| Phase 10 | T096–T101 | Polish + Constitution compliance (6 tasks) |
-| **Total** | **T001–T101** | **101 tasks** |
+| Phase 10 | T096–T107 | Polish + Constitution compliance (12 tasks) |
+| **Total** | **T001–T107** | **107 tasks** |
 
 **MANDATORY tests** (must not be skipped):
 - T036 `SiweVerifierTest` — nonce/sig/replay/domain
@@ -369,7 +375,8 @@ Task T039: AuthFlowIT.java (integration)
 - T093 `IndexerPollerTest` — reorg rewind + idempotency
 - T094 `IndexerReorgIT` — end-to-end reorg recovery
 - T096 `SecretLogScanTest` — SC-003 secret hygiene
+- T107 `ArchitectureTest` — api→persistence import ban + no static mutable state
 
-**Parallel opportunities**: 47 of 101 tasks marked `[P]` — significant concurrent execution possible once Phase 2 foundational work is complete.
+**Parallel opportunities**: 53 of 107 tasks marked `[P]` — significant concurrent execution possible once Phase 2 foundational work is complete.
 
 **Suggested MVP scope**: Phases 1–3 (39 tasks total) — delivers authentication + live package-status, which is the prerequisite for every other story.
