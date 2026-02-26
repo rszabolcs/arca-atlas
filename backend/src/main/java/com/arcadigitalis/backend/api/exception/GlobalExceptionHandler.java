@@ -61,37 +61,3 @@ public class GlobalExceptionHandler {
         return problem;
     }
 }
-
-// Exception classes
-class AuthException extends RuntimeException {
-    public AuthException(String message) {
-        super(message);
-    }
-}
-
-class ConflictException extends RuntimeException {
-    public ConflictException(String message) {
-        super(message);
-    }
-}
-
-class ValidationException extends RuntimeException {
-    public ValidationException(String message) {
-        super(message);
-    }
-}
-
-class IntegrityException extends RuntimeException {
-    public IntegrityException(String message) {
-        super(message);
-    }
-}
-
-class RpcUnavailableException extends RuntimeException {
-    public RpcUnavailableException(String message) {
-        super(message);
-    }
-    public RpcUnavailableException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
