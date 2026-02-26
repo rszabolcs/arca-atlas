@@ -8,7 +8,8 @@ info:
     storage, and notification subscription management.
 
     **Security**: All endpoints except `/auth/**`, `/packages/{packageKey}/status`,
-    `/packages/{packageKey}/recovery-kit`, `/acc-template`, and `/health/**` require
+    `/packages/{packageKey}/recovery-kit`, `/packages/{packageKey}/tx/renew`,
+    `/acc-template`, and `/health/**` require
     a valid Bearer JWT issued by `POST /auth/verify`.
 
     **Non-custodial**: All `**/prepare` and `**/payload` endpoints return unsigned
@@ -347,6 +348,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "409":
           description: Package is CLAIMABLE — checkIn will revert on-chain with AlreadyClaimable()
@@ -357,7 +359,11 @@ paths:
   /packages/{packageKey}/tx/renew:
     post:
       summary: Prepare renew() tx payload
+      description: |
+        Unauthenticated — any caller (including anonymous) may request the renew calldata.
+        The contract enforces no access control on renew(); it is a pure ETH-payment extension.
       operationId: prepareRenew
+      security: []
       parameters:
         - name: packageKey
           in: path
@@ -379,7 +385,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
-        "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /packages/{packageKey}/tx/update-manifest:
     post:
@@ -432,6 +438,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   # ─── Guardian Transaction Payloads ───────────────────────────────────────────
@@ -460,6 +467,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian for this package, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /packages/{packageKey}/tx/guardian-veto:
@@ -486,6 +494,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /packages/{packageKey}/tx/guardian-rescind-veto:
@@ -512,6 +521,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /packages/{packageKey}/tx/guardian-rescind-approve:
@@ -538,6 +548,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   # ─── Beneficiary ─────────────────────────────────────────────────────────────
@@ -566,6 +577,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not the beneficiary, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "409":
           description: Package is not CLAIMABLE (current status returned in error details)

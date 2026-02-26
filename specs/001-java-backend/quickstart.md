@@ -46,11 +46,14 @@ ARCA_POLICY_PROXY_ADDRESS=0x<deployed-proxy-address>
 # 32+ random bytes, base64-encoded
 ARCA_JWT_SECRET=<generate-with: openssl rand -base64 32>
 ARCA_JWT_TTL_SECONDS=3600
-
+# ── SIWE ─────────────────────────────────────────────────────────────
+# Domain that must exactly match the 'domain' field in SIWE signed messages.
+# Set to your frontend's host (e.g. app.arcadigitalis.com). Mismatch → HTTP 401.
+ARCA_SIWE_DOMAIN=localhost
 # ── Indexer ───────────────────────────────────────────────────
 ARCA_INDEXER_CONFIRMATION_DEPTH=1        # use 1 for testnet, 12 for mainnet
 ARCA_INDEXER_POLL_INTERVAL_SECONDS=15
-ARCA_INDEXER_START_BLOCK=0               # contract deployment block
+ARCA_INDEXER_START_BLOCK=<contract-deployment-block>  # REQUIRED: block at which the proxy was deployed
 
 # ── IPFS (optional for local dev) ─────────────────────────────
 ARCA_IPFS_ENABLED=false
@@ -200,11 +203,12 @@ Key application properties:
 | `arca.evm.rpc-url` | `ARCA_EVM_RPC_URL` | *(required)* |
 | `arca.evm.chain-id` | `ARCA_EVM_CHAIN_ID` | *(required)* |
 | `arca.policy.proxy-address` | `ARCA_POLICY_PROXY_ADDRESS` | *(required)* |
+| `arca.auth.siwe-domain` | `ARCA_SIWE_DOMAIN` | *(required)* — must match frontend host |
 | `arca.jwt.secret` | `ARCA_JWT_SECRET` | *(required)* |
 | `arca.jwt.ttl-seconds` | `ARCA_JWT_TTL_SECONDS` | `3600` |
 | `arca.indexer.confirmation-depth` | `ARCA_INDEXER_CONFIRMATION_DEPTH` | `12` |
 | `arca.indexer.poll-interval-seconds` | `ARCA_INDEXER_POLL_INTERVAL_SECONDS` | `15` |
-| `arca.indexer.start-block` | `ARCA_INDEXER_START_BLOCK` | `0` |
+| `arca.indexer.start-block` | `ARCA_INDEXER_START_BLOCK` | *(required)* — contract deployment block |
 | `arca.storage.ipfs.enabled` | `ARCA_IPFS_ENABLED` | `false` |
 | `arca.storage.s3.enabled` | `ARCA_S3_ENABLED` | `false` |
 | `arca.notifications.enabled` | `ARCA_NOTIFICATIONS_ENABLED` | `false` |
@@ -217,6 +221,8 @@ Before committing or sharing any config:
 
 - [ ] `.env` is in `.gitignore` — never commit it.
 - [ ] `ARCA_JWT_SECRET` is ≥ 32 bytes of random data.
+- [ ] `ARCA_SIWE_DOMAIN` matches the exact host of the production frontend (e.g., `app.arcadigitalis.com`); do not leave as `localhost` in production.
+- [ ] `ARCA_INDEXER_START_BLOCK` is set to the contract deployment block number, not `0`.
 - [ ] No wallet private keys appear anywhere in config or logs.
 - [ ] IPFS project secret is set via env var only, never hardcoded.
 - [ ] Log output checked: `grep -i 'key\|secret\|password\|dek\|seed\|private' app.log` returns only scrubbed entries.

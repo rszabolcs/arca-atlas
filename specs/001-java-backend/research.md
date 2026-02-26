@@ -197,3 +197,54 @@ cleanly. Symmetric signing is adequate for a single-service JWT issuer/validator
 available as a future upgrade if JWT validation must be delegated to other services.
 
 **Claims**: `sub` = wallet address (checksummed EIP-55), `jti` = UUID, `iat` + `exp`, `chainId`.
+
+---
+
+## 9. SIWE Domain Validation
+
+**Decision**: Validate the `domain` field in the EIP-4361 signed message against the exact value
+of `ARCA_SIWE_DOMAIN` (configured at startup). Mismatch → HTTP 401, no JWT issued.
+
+**Rationale**: SIWE messages include a `domain` field bound to the requesting origin. A backend
+that accepts any domain is vulnerable to cross-origin replay: a signed message obtained on
+`malicious.example` can be submitted to this service and would succeed without domain validation.
+EIP-4361 explicitly requires the verifying service to check `domain`. All SIWE reference
+implementations enforce this check; omitting it is a security regression.
+
+**Implementation detail**: The `auth` module's SIWE parser already extracts the `domain` field
+(research §1). Add a single equality check after parsing: `if (!parsedDomain.equals(configuredDomain)) reject 401`.
+No library change required.
+
+**Alternatives considered**:
+- Suffix/allowlist (e.g., `*.arcadigitalis.com`) — more flexible, but wildcard matching
+  introduces edge cases and added configuration surface for MVP; exact-match is strictly safer
+  and sufficient for single-origin deployments.
+- No validation — insecure; rejected.
+
+---
+
+## 10. Indexer Start-Block Strategy
+
+**Decision**: On first run (no rows in `processed_blocks`), the indexer begins from the block
+number configured via `ARCA_INDEXER_START_BLOCK`. On subsequent runs it resumes from the
+highest `block_number` in `processed_blocks` (already the existing design). `ARCA_INDEXER_START_BLOCK`
+MUST be set to the contract deployment block.
+
+**Rationale**:
+- **Syncing from genesis (block 0)**: wasted work; the contract did not exist before its
+  deployment block. On mainnet with millions of blocks this could take hours.
+- **Syncing from service-start block**: silently drops all historical events (e.g., `Activated`,
+  `PendingRelease`, `Released` events that fired before this deployment). Notification subscribers
+  and event history queries would return incomplete data. Violates Principle II (full replayability).
+- **Syncing from contract deployment block**: minimal correct starting point. All contract events
+  exist from that block onward. The deployment block is a known value available at deploy time.
+
+**Operational guidance**: Set `ARCA_INDEXER_START_BLOCK` in the deployment environment config to
+the block in which the proxy contract was first deployed. On redeployment/reset, truncate
+`processed_blocks` and restart; the indexer will re-sync from the configured start block.
+
+**Alternatives considered**:
+- Storing deployment block in DB at first-run via a contract `eth_getCode` scan — adds complexity
+  without benefit; deployment block is a deploy-time known constant.
+- Always re-sync from genesis — too slow for mainnet.
+- Auto-detect via binary search for first emitted event — fragile if no events have occurred yet.
