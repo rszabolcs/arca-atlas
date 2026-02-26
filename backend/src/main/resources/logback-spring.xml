@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="com.arcadigitalis.backend.logging.MaskingPatternLayout">
+                <pattern>%d{yyyy-MM-dd HH:mm:ss} - %msg%n</pattern>
+            </layout>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!-- TODO: T021 - Implement MaskingPatternLayout for field-level scrubbing -->
+    <!-- Fields to mask: key, secret, password, seed, dek, private -->
+</configuration>
