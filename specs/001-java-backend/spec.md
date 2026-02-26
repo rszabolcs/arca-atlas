@@ -7,9 +7,12 @@
 
 ## Clarifications
 
-### Session 2026-02-27
+### Session 2026-02-27 (round 4 — proxy boundary audit)
 
-- Q: Naming fix (no question, self-evident): The spec used `Activated` as the event name throughout; the contract emits `PackageActivated`. → A: Corrected to `PackageActivated` everywhere (spec.md, data-model.md, openapi.yaml). FR-026 expanded to all 13 contract events with cache-update rules.
+- Q: Should the backend refuse to encode `/tx/renew` and ETH-bearing `/tx/activate` calldata when `fundingEnabled: false`, or always return calldata and let the chain revert with `FundingDisabled()`? → A: Enforce at the backend layer (HTTP 400). `pricePerSecond` is a deployment constant; refusing to encode saves the user a wasted funded tx with no correctness loss. The chain still enforces it independently. FR-010a confirmed as-is.
+- Q: General pre-flight principle for tx endpoints: should the backend add live status reads to all tx endpoints to prevent predictable reverts, or only surface 409s when a live read is already required? → A: Option A — pre-flight only when a live status read is already required (for auth or an existing check). No extra RPC calls are added solely to pre-flight. Endpoints that already perform a live read (owner-auth endpoints, guardian-auth endpoints, claim) MUST surface 409 for predictable status-based reverts. Unauthenticated endpoints (`/tx/renew`, `/tx/rescue`) return calldata unconditionally. Added as FR-012d.
+
+### Session 2026-02-27 The spec used `Activated` as the event name throughout; the contract emits `PackageActivated`. → A: Corrected to `PackageActivated` everywhere (spec.md, data-model.md, openapi.yaml). FR-026 expanded to all 13 contract events with cache-update rules.
 - Q: Data model completeness (no question, self-evident): `package_cache` lacked `last_check_in` and `paid_until` columns; `event_records` lacked `reason_flags` documentation for `PendingRelease`; state-transitions table was missing `CheckIn`, `Renewed`, `PackageRescued` rows. → A: `last_check_in` and `paid_until` added to `package_cache`; `raw_data` annotated for `PendingRelease`; state-transitions table completed; event type enum updated to 13 types.
 - Q: Naming fix (no question, self-evident): openapi.yaml operationId `prepareUpdateManifest` / summary `updateManifest()` did not match the contract function `updateManifestUri(bytes32,string)`. → A: Corrected to `prepareUpdateManifestUri` / `updateManifestUri()` so ABI encoding aligns with the on-chain function selector.
 - Q: Should the backend provide a `/tx/rescue` unsigned payload endpoint for the upgrade authority's `rescue()` call? → A: Yes — unauthenticated at the payload layer (same pattern as `/tx/renew`; the contract enforces `NotAuthorized()` on-chain). Added to FR-012 and `openapi.yaml`.
@@ -402,6 +405,19 @@ complete.
   unauthenticated anonymous callers) MUST be able to request the unsigned `renew()` calldata.
   The contract enforces no access control on `renew()` — it is a pure ETH-payment extension
   callable by anyone. The backend MUST NOT require a session token on this endpoint.
+- **FR-012d**: **General pre-flight principle**: any tx endpoint that already performs a live
+  chain status read (for auth or an existing guard) MUST additionally return HTTP 409 for any
+  predictable status-based on-chain revert derivable from that status read. No extra RPC call
+  MUST be added to an endpoint solely for pre-flight. Specifically:
+  - Owner endpoints (`checkIn`, `updateManifestUri`, `revoke`) MUST return 409 when status is
+    `RELEASED` or `REVOKED` (the live owner-auth read already provides the status).
+  - `checkIn` additionally MUST return 409 when status is `CLAIMABLE` (FR-012a).
+  - Guardian endpoints (`guardianApprove`, `guardianVeto`, `guardianRescindVeto`,
+    `guardianRescindApprove`) MUST return 409 when status is not `PENDING_RELEASE` (`NotPending()`)
+    or when status is `RELEASED` or `REVOKED` (the live guardian-auth read already provides status).
+  - `claim` MUST return 409 when status is not `CLAIMABLE` (FR-017a).
+  - Unauthenticated endpoints (`/tx/renew`, `/tx/rescue`) MUST NOT add a live status read solely
+    for pre-flight; they return calldata unconditionally (the chain enforces correctness).
 - **FR-013**: No write endpoint MUST sign a transaction or submit it to the network on behalf of
   any user; the service returns calldata only.
 

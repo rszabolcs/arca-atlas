@@ -445,7 +445,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TxPayload' }
+        "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is RELEASED or REVOKED — updateManifestUri() will revert on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /packages/{packageKey}/tx/revoke:
     post:
@@ -473,6 +479,11 @@ paths:
               schema: { $ref: '#/components/schemas/TxPayload' }
         "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is already RELEASED or REVOKED — revoke() will revert on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /packages/{packageKey}/tx/rescue:
     post:
@@ -533,6 +544,11 @@ paths:
               schema: { $ref: '#/components/schemas/TxPayload' }
         "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian for this package, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is not PENDING_RELEASE, or is RELEASED/REVOKED — guardianApprove() will revert on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /packages/{packageKey}/tx/guardian-veto:
     post:
@@ -560,6 +576,11 @@ paths:
               schema: { $ref: '#/components/schemas/TxPayload' }
         "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is not PENDING_RELEASE, or is RELEASED/REVOKED — guardianVeto() will revert on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /packages/{packageKey}/tx/guardian-rescind-veto:
     post:
@@ -587,6 +608,11 @@ paths:
               schema: { $ref: '#/components/schemas/TxPayload' }
         "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is RELEASED or REVOKED — guardianRescindVeto() will revert on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /packages/{packageKey}/tx/guardian-rescind-approve:
     post:
@@ -614,6 +640,11 @@ paths:
               schema: { $ref: '#/components/schemas/TxPayload' }
         "400": { description: proxyAddress or chainId does not match configured values, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         "403": { description: Not a guardian, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "409":
+          description: Package is RELEASED or REVOKED — guardianRescindApprove() will revert on-chain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   # ─── Beneficiary ─────────────────────────────────────────────────────────────
 
