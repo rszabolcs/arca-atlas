@@ -5,6 +5,18 @@
 **Status**: Draft
 **Input**: Build the Arca Java Backend — a REST API service for ArcaDigitalis Vault that integrates with an existing deployed EVM policy smart contract (via proxy address) and Lit Protocol, providing Owner, Guardian, and Beneficiary endpoints with SIWE authentication, non-custodial transaction payloads, reorg-safe event indexing, storage adapters, Lit ACC template generation/validation, and best-effort notifications.
 
+## Clarifications
+
+### Session 2026-02-26
+
+- Q: How are notification targets registered and managed? → A: Dedicated authenticated API endpoints (per package, per event type), managed by the package owner or beneficiary; `NotificationTarget` persisted in the backend DB.
+- Q: What is the deployment availability model for the MVP? → A: Single-instance primary; no distributed coordination or leader election required at MVP; horizontal scale is achievable later without redesign, because event processing is idempotent (FR-029) and DB is the sole state store.
+- Q: What are the latency and polling-interval targets? → A: API status endpoints p95 ≤ 500 ms; event indexer polling interval ≤ 15 seconds.
+- Q: How deep is `/validate-manifest` validation — local only, or does it include live network reads? → A: Three-layer validation: (1) structural field presence + ACC address/value correctness (proxy address, chainId, packageKey, ACC `functionName` == `isReleased`, ACC `functionParams[0]` == packageKey, `requester` == beneficiary) — fully local; (2) one live Ethereum RPC read confirming the packageKey is activated and the on-chain beneficiary matches the manifest `requester`; (3) non-empty, non-whitespace, plausible-length guard on `encryptedSymmetricKey` — no cryptographic or Lit-network check.
+- Q: What is the canonical package status model the backend must surface, and do WARNING and CLAIMABLE require distinct handling? → A: Full 7-state enum mirroring the contract: `DRAFT`, `ACTIVE`, `WARNING`, `PENDING_RELEASE`, `CLAIMABLE`, `RELEASED`, `REVOKED`. WARNING and CLAIMABLE are lazily computed by the contract's `getPackageStatus()` view — never written to `storedStatus`. The backend must expose all 7 as first-class values. CLAIMABLE is distinct from PENDING_RELEASE: only a CLAIMABLE package allows `claim()` to succeed; `checkIn()` reverts on-chain with `AlreadyClaimable()` when the package is CLAIMABLE. Derived from: `spec-with-data-model.md §1.3`, `spec-with-transitions.md` clarification sessions.
+
+---
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 — Package Discovery & Wallet Authentication (Priority: P1)
@@ -237,7 +249,7 @@ complete.
 
 1. **Given** the indexer is running, **When** an `Activated`, `ManifestUpdated`, `PendingRelease`,
    `Released`, `Revoked`, or guardian event is emitted on-chain and has reached the confirmation
-   depth, **Then** the event is recorded in the local index within a reasonable polling interval.
+   depth, **Then** the event is recorded in the local index within **≤ 15 seconds** (one indexer polling cycle).
 
 2. **Given** a chain reorganization occurs — i.e., a previously indexed block is superseded by a
    competing chain — **When** the indexer detects a `blockHash` mismatch, **Then** it rewinds the
@@ -279,6 +291,16 @@ complete.
   it MUST NOT propagate as an error to the event indexer or any user-facing endpoint.
 - What happens when more than 7 guardians are submitted in a request? The service MUST reject the
   request with HTTP 400 — this mirrors the contract-level constraint.
+- What happens when a notification subscription is created for a package where the caller is
+  neither owner nor beneficiary? The service MUST reject the request with HTTP 403; subscription
+  registration is restricted to authenticated owners and beneficiaries of the specific package.
+- What happens when the beneficiary calls the claim transaction-payload endpoint for a package
+  in `PENDING_RELEASE` (grace not yet elapsed, status not yet `CLAIMABLE`)? The service MUST
+  detect the status via a live chain read and return HTTP 409 indicating the package is not yet
+  CLAIMABLE; it MUST NOT return a payload that will revert on-chain with `GracePeriodNotElapsed()`.
+- What happens when the owner calls the checkIn transaction-payload endpoint for a package in
+  `CLAIMABLE` state? The service MUST detect the status via a live chain read and return HTTP 409;
+  it MUST NOT return a checkIn payload that will revert on-chain with `AlreadyClaimable()`.
 
 ---
 
@@ -313,6 +335,10 @@ complete.
   released-at timestamp.
 - **FR-009**: The service MUST return status `DRAFT` for any `packageKey` that has no on-chain
   activation record; `DRAFT` is a valid response, not an error.
+- **FR-009a**: The service MUST surface `WARNING` and `CLAIMABLE` as distinct, first-class status
+  values in all package-status responses. These values are lazily derived by the contract's
+  `getPackageStatus()` view call; the backend MUST NOT substitute or collapse them to adjacent
+  statuses (e.g., treating `WARNING` as `ACTIVE`, or treating `CLAIMABLE` as `PENDING_RELEASE`).
 - **FR-010**: The service MUST support an unauthenticated read of package status for the
   recovery-kit path (the recovery kit endpoint must not require authentication).
 
@@ -323,6 +349,10 @@ complete.
 - **FR-012**: The service MUST provide endpoints that return unsigned payloads for `checkIn(...)`,
   `renew(...)`, `guardianApprove(...)`, `guardianVeto(...)`, `guardianRescindVeto(...)`,
   `claim(...)`, and `revoke(...)` contract calls.
+- **FR-012a**: The `checkIn` payload endpoint MUST perform a live chain status read before
+  returning a payload; if the package status is `CLAIMABLE`, the endpoint MUST return HTTP 409
+  with a clear error message rather than a payload that will revert on-chain with
+  `AlreadyClaimable()`.
 - **FR-013**: No write endpoint MUST sign a transaction or submit it to the network on behalf of
   any user; the service returns calldata only.
 
@@ -339,6 +369,10 @@ complete.
 - **FR-016**: The recovery-kit endpoint MUST perform a live chain read when the local index is
   absent or stale; it MUST NOT return an error solely because the DB has no record of the package.
 - **FR-017**: The service MUST provide a claim transaction payload endpoint for beneficiaries.
+- **FR-017a**: The claim payload endpoint MUST perform a live chain status read; if the package
+  status is not `CLAIMABLE`, the endpoint MUST return HTTP 409 with a message indicating the
+  current status; it MUST NOT return a claim payload for a package in `PENDING_RELEASE` or any
+  earlier state.
 
 **Lit Protocol Integration**
 
@@ -347,10 +381,20 @@ complete.
 - **FR-019**: The ACC MUST condition unwrap on `policyProxy.isReleased(packageKey) == true`
   evaluated against the specified proxy address, and MUST restrict the requester to the
   beneficiary address.
-- **FR-020**: The service MUST expose a manifest-validation endpoint that checks the manifest's
-  embedded ACC binds to the correct proxy address, `chainId`, and `packageKey`; it MUST reject
-  manifestos (HTTP 400) that reference a different proxy or are missing required Lit fields
-  (`encryptedSymmetricKey`).
+- **FR-020**: The service MUST expose a manifest-validation endpoint (`POST /validate-manifest`)
+  implementing three validation layers:
+  1. **Structural + address correctness (local)**: all required fields present (`packageKey`,
+     `policy.chainId`, `policy.contract`, `keyRelease.accessControl`, `keyRelease.requester`,
+     `keyRelease.encryptedSymmetricKey`); ACC `contractAddress` matches the known proxy address;
+     `chainId` matches the configured chain; ACC `functionName` == `isReleased`; ACC
+     `functionParams[0]` == `packageKey`; `requester` == manifest `beneficiary` field.
+  2. **Live Ethereum RPC read**: confirm `packageKey` is activated on-chain (status != `DRAFT`)
+     and the on-chain beneficiary address matches the manifest `requester` field.
+  3. **`encryptedSymmetricKey` blob guard**: the value MUST be a non-empty, non-whitespace
+     string of plausible minimum length (> 0 bytes after trimming); no cryptographic or
+     Lit-network check is performed.
+  Any layer failure MUST return HTTP 400 with a structured error identifying the failing check.
+  No Lit network call is ever made by this endpoint.
 - **FR-021**: The service MUST NOT store, log, or transmit raw DEKs, plaintext assets, or Lit
   session secrets at any point.
 
@@ -385,6 +429,14 @@ complete.
 - **FR-031**: The service MUST dispatch best-effort notifications for `PendingRelease`,
   `Released`, `Revoked`, and guardian approve/veto/rescind events via at least one configurable
   channel (email, webhook, or push).
+- **FR-031a**: The service MUST provide authenticated REST endpoints for a package owner or
+  beneficiary to create, update, and delete a `NotificationTarget` (subscription) for a specific
+  package and one or more event types; no other role may register or modify subscriptions for a
+  package.
+- **FR-031b**: The service MUST support at least one of: email address, webhook URL, or push
+  token as a notification target type per subscription record.
+- **FR-031c**: The service MUST validate that the address registering a subscription is the
+  on-chain owner or beneficiary of the referenced package before persisting the target.
 - **FR-032**: Notification delivery failures MUST be logged and retried a bounded number of
   times; failures MUST NOT cause errors in the indexer or any API endpoint.
 - **FR-033**: Notification delivery MUST NOT be on the critical path of recovery; a beneficiary
@@ -399,11 +451,41 @@ complete.
 
 ---
 
+### Non-Functional Requirements
+
+**Deployment Model**
+
+- **NFR-001**: The MVP deployment model is a **single-instance primary**. The service MUST NOT
+  require distributed locking, leader election, or consensus machinery to operate correctly.
+- **NFR-002**: The event indexer MUST run as a single goroutine/thread within the service
+  process. Multiple concurrent indexer instances MUST NOT run against the same database; the
+  idempotency guarantee (FR-029) is the safety net for accidental overlap, not the intended
+  operating mode.
+- **NFR-003**: The service MUST be horizontally scalable in a future phase without architectural
+  redesign: all mutable state lives exclusively in the PostgreSQL database; no in-process shared
+  state is required between instances. API instances may be load-balanced freely; the indexer
+  must continue to run as a singleton.
+- **NFR-004**: The service MUST expose a liveness and readiness health endpoint (`/health/live`
+  and `/health/ready`) suitable for container orchestrator probes. Readiness MUST reflect DB
+  connectivity and RPC node reachability.
+- **NFR-005**: The event indexer MUST poll for new blocks at a configurable interval with a
+  default of **15 seconds**. Events confirmed to the configured depth MUST appear in the local
+  index within one polling cycle of block confirmation.
+- **NFR-006**: Package-status and recovery-kit read endpoints MUST achieve **p95 latency ≤ 500 ms**
+  under normal load, measured from request receipt to response sent, inclusive of any live RPC
+  call required for authorization. DB-backed read paths MUST be indexed appropriately to sustain
+  this target at ≥ 1 million package rows.
+
+---
+
 ### Key Entities
 
 - **Package**: A vault unit identified by `(chainId, proxy address, packageKey)`. Carries status,
   owner, guardian list, beneficiary, manifest URI, and lifecycle timestamps. Status values:
-  `DRAFT`, `ACTIVE`, `PENDING_RELEASE`, `RELEASED`, `REVOKED`.
+  `DRAFT`, `ACTIVE`, `WARNING`, `PENDING_RELEASE`, `CLAIMABLE`, `RELEASED`, `REVOKED`.
+  `WARNING` and `CLAIMABLE` are lazily derived by the contract's `getPackageStatus()` view
+  function and are never written to on-chain storage; the backend treats them as first-class
+  statuses and MUST NOT collapse them to adjacent values.
 
 - **Guardian**: An address authorized (on-chain) to approve or veto a pending release for a
   specific package. Maximum 7 per package. Carries their current approval/veto state for a
@@ -424,9 +506,12 @@ complete.
 - **StoredArtifact**: A pinned binary or JSON document. Carries: storage URI(s), sha256 hash,
   artifact type (manifest | ciphertext), creation timestamp, and storage backend confirmation.
 
-- **NotificationTarget**: A configured delivery endpoint (email address, webhook URL, push token)
-  associated with a package and one or more event types. Carries delivery attempt log and last
-  delivery status.
+- **NotificationTarget**: A delivery subscription registered by a package owner or beneficiary
+  via the authenticated API. Associates a specific package with one or more event types and a
+  delivery channel (email address, webhook URL, or push token). Carries: subscriber address,
+  package reference, subscribed event types, channel type, channel value, creation timestamp,
+  last delivery attempt timestamp, and last delivery status. Restricted to on-chain owners and
+  beneficiaries; enforced by live chain read at registration time.
 
 ---
 
@@ -450,12 +535,13 @@ complete.
   testnet environment: post-reorg indexed state matches canonical state with zero orphaned or
   missing events. Verified as an automated integration test.
 
-- **SC-005**: A manifest with an incorrect proxy address or missing `encryptedSymmetricKey` is
-  rejected 100% of the time by the manifest-validation endpoint. Verified by a property-based
-  fuzz test.
+- **SC-005**: A manifest with an incorrect proxy address, a beneficiary mismatch against the
+  on-chain record, or a missing/empty `encryptedSymmetricKey` is rejected 100% of the time by
+  the manifest-validation endpoint. Verified by a property-based fuzz test covering all three
+  validation layers.
 
-- **SC-006**: Paginated queries for packages associated with a given address return results within
-  a user-perceivable time at a dataset size of at least one million packages, without on-chain
+- **SC-006**: Paginated queries for packages associated with a given address return results at
+  **p95 ≤ 500 ms** at a dataset size of at least one million packages, without on-chain
   enumeration. Verified by a load test against a seeded local database.
 
 - **SC-007**: A notification delivery failure for one package does not produce any error response
@@ -487,6 +573,9 @@ complete.
 - Notification delivery channels and credentials are configured via environment/infrastructure
   config outside the backend's own data store; the backend does not manage notification-channel
   secrets at runtime.
+- The MVP runs as a single process instance. No distributed coordination (distributed locks,
+  consensus, leader election) is required at MVP. Horizontal scaling is deferred; the design
+  MUST NOT depend on shared in-process state to achieve correctness.
 - The backend does not govern, observe, or respond to proxy-contract upgrade events for
   authorization purposes; proxy upgrades are an infrastructure concern. The backend may optionally
   index upgrade events for informational UX purposes only.
