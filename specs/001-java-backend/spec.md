@@ -14,6 +14,11 @@
 - Q: What are the latency and polling-interval targets? → A: API status endpoints p95 ≤ 500 ms; event indexer polling interval ≤ 15 seconds.
 - Q: How deep is `/validate-manifest` validation — local only, or does it include live network reads? → A: Three-layer validation: (1) structural field presence + ACC address/value correctness (proxy address, chainId, packageKey, ACC `functionName` == `isReleased`, ACC `functionParams[0]` == packageKey, `requester` == beneficiary) — fully local; (2) one live Ethereum RPC read confirming the packageKey is activated and the on-chain beneficiary matches the manifest `requester`; (3) non-empty, non-whitespace, plausible-length guard on `encryptedSymmetricKey` — no cryptographic or Lit-network check.
 - Q: What is the canonical package status model the backend must surface, and do WARNING and CLAIMABLE require distinct handling? → A: Full 7-state enum mirroring the contract: `DRAFT`, `ACTIVE`, `WARNING`, `PENDING_RELEASE`, `CLAIMABLE`, `RELEASED`, `REVOKED`. WARNING and CLAIMABLE are lazily computed by the contract's `getPackageStatus()` view — never written to `storedStatus`. The backend must expose all 7 as first-class values. CLAIMABLE is distinct from PENDING_RELEASE: only a CLAIMABLE package allows `claim()` to succeed; `checkIn()` reverts on-chain with `AlreadyClaimable()` when the package is CLAIMABLE. Derived from: `spec-with-data-model.md §1.3`, `spec-with-transitions.md` clarification sessions.
+- Q: Single-proxy vs multi-proxy architecture — should the backend support routing requests across multiple proxy addresses or chains? → A: Single proxy + single chain per instance. The contract is inherently single-proxy per deployment; there is no on-chain multi-tenancy to serve. Any request supplying a `proxyAddress` or `chainId` that does not match the service's configured values MUST be rejected with HTTP 400. Multi-chain deployments are an explicit out-of-scope future extension, not MVP.
+- Q: When the RPC node is unreachable, which read endpoints may serve a stale cached response, and which must return HTTP 503? → A: Auth-gated reads (any endpoint that performs a live chain authorization check — guardian access verification, beneficiary validation, notification-target registration) MUST return HTTP 503 if the RPC is unreachable; serving stale auth data could grant access to a revoked guardian. Pure indexed-data reads (package status from DB cache, event history, stored artifacts, paginated package lists) MAY serve cached data and MUST include an `X-Data-Staleness-Seconds` response header indicating seconds since last successful sync.
+- Q: Should the backend validate the `domain` field in the SIWE signed message against the service's own configured host? → A: Yes — Option B. The backend MUST validate the `domain` field exactly against a configured value (`ARCA_SIWE_DOMAIN`). A mismatch MUST be rejected with HTTP 401. This blocks cross-origin replay attacks where a message signed for a different site is submitted to this service.
+- Q: Should `/tx/renew` require JWT authentication? → A: No. The endpoint is unauthenticated; any caller (including anonymous) may request the unsigned `renew()` calldata. The contract enforces no access control on `renew()` — it is a pure ETH-payment extension callable by anyone. Backend state reset (clearing `pendingSince`) is driven by indexing the on-chain event after the tx mines, not by who requested the payload.
+- Q: What should the indexer's starting block be on first run (before any sync state is persisted)? → A: The contract deployment block number, supplied via `ARCA_INDEXER_START_BLOCK`. Syncing from genesis wastes resources; syncing from service-start silently drops historical events needed for notification subscribers and event history. On subsequent starts the indexer resumes from the last processed block stored in `processed_blocks`.
 
 ---
 
@@ -274,9 +279,13 @@ complete.
 
 - What happens when a `packageKey` has never been activated? Status MUST be `DRAFT` (not an
   error, not null) — read from the contract, not from a missing DB row.
-- What happens when the chain RPC is temporarily unavailable? Write endpoints that require live
-  authorization checks MUST fail safe (HTTP 503); read endpoints MAY return cached data with a
-  staleness indicator.
+- What happens when the chain RPC is temporarily unavailable? **Auth-gated read endpoints** (those
+  performing a live chain authorization check: guardian access verification, beneficiary validation,
+  notification-target registration) MUST return HTTP 503. **Pure indexed-data read endpoints**
+  (package status from DB cache, event history, stored artifacts, paginated package lists) MAY
+  return cached data and MUST include an `X-Data-Staleness-Seconds` response header indicating
+  seconds since last successful sync. All write/payload endpoints that require live authorization
+  MUST return HTTP 503.
 - What happens if two concurrent requests attempt to process the same event during replay? Event
   processing MUST be idempotent; duplicate processing MUST produce the same state as a single
   processing.
@@ -291,6 +300,9 @@ complete.
   it MUST NOT propagate as an error to the event indexer or any user-facing endpoint.
 - What happens when more than 7 guardians are submitted in a request? The service MUST reject the
   request with HTTP 400 — this mirrors the contract-level constraint.
+- What happens when the `domain` field in a SIWE signed message does not match `ARCA_SIWE_DOMAIN`?
+  The service MUST reject the authentication attempt with HTTP 401 and MUST NOT issue a session
+  token; this prevents replay of messages signed for other origins.
 - What happens when a notification subscription is created for a package where the caller is
   neither owner nor beneficiary? The service MUST reject the request with HTTP 403; subscription
   registration is restricted to authenticated owners and beneficiaries of the specific package.
@@ -301,6 +313,9 @@ complete.
 - What happens when the owner calls the checkIn transaction-payload endpoint for a package in
   `CLAIMABLE` state? The service MUST detect the status via a live chain read and return HTTP 409;
   it MUST NOT return a checkIn payload that will revert on-chain with `AlreadyClaimable()`.
+- What happens when a request supplies a `proxyAddress` or `chainId` that does not match the
+  service's configured values? The service MUST reject with HTTP 400 and a message identifying
+  the mismatch (e.g., `"proxyAddress does not match configured proxy"`).
 
 ---
 
@@ -313,7 +328,11 @@ complete.
 - **FR-001**: The service MUST issue a unique, time-limited nonce to any client requesting
   authentication, binding it to the requesting address.
 - **FR-002**: The service MUST verify a Sign-In With Ethereum (SIWE / EIP-4361) signed message
-  against the issued nonce and the claimed address before issuing a session token.
+  against the issued nonce, the claimed address, and the configured service domain before issuing
+  a session token. The `domain` field in the signed message MUST exactly match the value of
+  `ARCA_SIWE_DOMAIN`; a mismatch MUST be rejected with HTTP 401.
+- **FR-002a**: The service MUST reject SIWE verification attempts where the signed message `domain`
+  does not exactly match `ARCA_SIWE_DOMAIN`, preventing cross-origin replay of signed messages.
 - **FR-003**: The service MUST reject replayed SIWE signatures (nonce already consumed).
 - **FR-004**: The service MUST issue session tokens with a configurable short lifetime; expired
   tokens MUST be rejected on all protected endpoints.
@@ -348,11 +367,15 @@ complete.
   an unsigned `activate(...)` transaction payload (calldata + target address + gas estimate).
 - **FR-012**: The service MUST provide endpoints that return unsigned payloads for `checkIn(...)`,
   `renew(...)`, `guardianApprove(...)`, `guardianVeto(...)`, `guardianRescindVeto(...)`,
-  `claim(...)`, and `revoke(...)` contract calls.
+  `guardianRescindApprove(...)`, `claim(...)`, and `revoke(...)` contract calls.
 - **FR-012a**: The `checkIn` payload endpoint MUST perform a live chain status read before
   returning a payload; if the package status is `CLAIMABLE`, the endpoint MUST return HTTP 409
   with a clear error message rather than a payload that will revert on-chain with
   `AlreadyClaimable()`.
+- **FR-012b**: The `renew` payload endpoint is **unauthenticated**; any caller (including
+  unauthenticated anonymous callers) MUST be able to request the unsigned `renew()` calldata.
+  The contract enforces no access control on `renew()` — it is a pure ETH-payment extension
+  callable by anyone. The backend MUST NOT require a session token on this endpoint.
 - **FR-013**: No write endpoint MUST sign a transaction or submit it to the network on behalf of
   any user; the service returns calldata only.
 
@@ -418,6 +441,12 @@ complete.
   consistent block before replaying.
 - **FR-028**: The indexer MUST apply a configurable confirmation depth before treating an event
   as finalized.
+- **FR-028a**: On first run (no sync state in `processed_blocks`), the indexer MUST begin
+  scanning from the block number configured in `ARCA_INDEXER_START_BLOCK`. This value MUST be
+  set to the contract deployment block; syncing from before deployment is wasted work, and
+  syncing from service-start silently drops historical events. On subsequent starts the indexer
+  MUST resume from the last processed block stored in `processed_blocks`, ignoring
+  `ARCA_INDEXER_START_BLOCK`.
 - **FR-029**: Event processing MUST be idempotent; re-processing an already-indexed event MUST
   NOT produce duplicate records.
 - **FR-030**: The service MUST support paginated queries of indexed events filtered by owner
@@ -475,6 +504,12 @@ complete.
   under normal load, measured from request receipt to response sent, inclusive of any live RPC
   call required for authorization. DB-backed read paths MUST be indexed appropriately to sustain
   this target at ≥ 1 million package rows.
+- **NFR-007**: The service is configured at startup for exactly **one policy proxy address** and
+  **one chain ID** (`ARCA_POLICY_PROXY_ADDRESS`, `ARCA_EVM_CHAIN_ID`). Any request body or query
+  parameter supplying a different `proxyAddress` or `chainId` MUST be rejected with HTTP 400 and
+  an error message identifying the mismatch. Multi-proxy and multi-chain operation are explicit
+  out-of-scope future extensions; the MVP does not support routing across multiple proxies or
+  chains.
 
 ---
 
@@ -557,7 +592,8 @@ complete.
 
 - The EVM policy smart contract is already deployed and its ABI is available to the backend team.
   Backend integration uses the proxy address exclusively; the implementation address is an
-  internal contract detail.
+  internal contract detail. The contract deployment block number is a known value at deploy time
+  and MUST be supplied as `ARCA_INDEXER_START_BLOCK`.
 - `getPackageStatus(packageKey)` returns `DRAFT` for any package key not yet activated; the
   backend mirrors this as a first-class status, not an error.
 - Guardian set size is bounded at 7 per package, enforced by the contract; the backend validates
@@ -576,6 +612,11 @@ complete.
 - The MVP runs as a single process instance. No distributed coordination (distributed locks,
   consensus, leader election) is required at MVP. Horizontal scaling is deferred; the design
   MUST NOT depend on shared in-process state to achieve correctness.
+- The service operates against a **single configured policy proxy address** on a **single
+  configured chain**. The contract is inherently single-proxy per deployment; there is no
+  on-chain multi-tenancy to serve. Multi-chain deployments (running multiple instances against
+  different proxies/chains) are a future extension; the MVP does not support routing across
+  multiple proxies or chains.
 - The backend does not govern, observe, or respond to proxy-contract upgrade events for
   authorization purposes; proxy upgrades are an infrastructure concern. The backend may optionally
   index upgrade events for informational UX purposes only.
