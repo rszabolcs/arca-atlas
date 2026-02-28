@@ -451,6 +451,17 @@ coverage/
 
 .oz-validate-build-info/
 
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+*.iml
+
+# Docker
+docker-compose.override.yml
+
 # Universal
 .DS_Store
 Thumbs.db
