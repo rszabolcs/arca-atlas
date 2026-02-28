@@ -32,9 +32,10 @@ public class NonceService {
 
     /**
      * Issue a new nonce for the given wallet address.
+     * Returns a NonceData record instead of the entity to avoid persistence leakage.
      */
     @Transactional
-    public NonceEntity issueNonce(String walletAddress) {
+    public NonceData issueNonce(String walletAddress) {
         byte[] randomBytes = new byte[NONCE_BYTES];
         secureRandom.nextBytes(randomBytes);
         String nonceValue = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
@@ -44,8 +45,11 @@ public class NonceService {
                 nonceValue,
                 Instant.now().plus(NONCE_TTL)
         );
-        return nonceRepository.save(entity);
+        entity = nonceRepository.save(entity);
+        return new NonceData(entity.getNonce(), entity.getExpiresAt());
     }
+
+    public record NonceData(String nonce, Instant expiresAt) {}
 
     /**
      * Consume the nonce atomically. Throws AuthException if not found, expired, or already consumed.

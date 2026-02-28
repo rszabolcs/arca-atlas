@@ -8,8 +8,9 @@ import com.arcadigitalis.backend.api.exception.ValidationException;
 import com.arcadigitalis.backend.auth.JwtService;
 import com.arcadigitalis.backend.auth.NonceService;
 import com.arcadigitalis.backend.auth.SiweVerifier;
-import com.arcadigitalis.backend.persistence.entity.NonceEntity;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -31,16 +32,20 @@ public class AuthController {
 
     @PostMapping("/nonce")
     @Operation(summary = "Issue a SIWE nonce", operationId = "issueNonce")
+    @ApiResponses({@ApiResponse(responseCode = "200", description = "Nonce issued"),
+                   @ApiResponse(responseCode = "400", description = "Invalid wallet address")})
     public ResponseEntity<NonceResponse> issueNonce(@RequestBody NonceRequest request) {
         if (request.walletAddress() == null || !request.walletAddress().matches("^0x[0-9a-fA-F]{40}$")) {
             throw new ValidationException("Invalid wallet address format");
         }
-        NonceEntity nonce = nonceService.issueNonce(request.walletAddress());
-        return ResponseEntity.ok(new NonceResponse(nonce.getNonce(), nonce.getExpiresAt()));
+        NonceService.NonceData nonce = nonceService.issueNonce(request.walletAddress());
+        return ResponseEntity.ok(new NonceResponse(nonce.nonce(), nonce.expiresAt()));
     }
 
     @PostMapping("/verify")
     @Operation(summary = "Verify SIWE message and issue JWT", operationId = "verifySiwe")
+    @ApiResponses({@ApiResponse(responseCode = "200", description = "JWT token issued"),
+                   @ApiResponse(responseCode = "401", description = "Signature verification failed")})
     public ResponseEntity<VerifyResponse> verify(@RequestBody VerifyRequest request) {
         if (request.message() == null || request.message().isBlank()) {
             throw new ValidationException("Message is required");
