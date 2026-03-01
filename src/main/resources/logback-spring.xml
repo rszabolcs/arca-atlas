@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- Secret-scrubbing pattern layout (FR-035) -->
+    <appender name="SCRUBBED_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %replace(%msg){
+                '(?i)(key|secret|password|seed|dek|private)\s*[=:]\s*\S+', '$1=***REDACTED***'
+            }%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Root logger uses scrubbed console -->
+    <root level="INFO">
+        <appender-ref ref="SCRUBBED_CONSOLE"/>
+    </root>
+
+    <!-- Application-level logging -->
+    <logger name="com.arcadigitalis.backend" level="INFO"/>
+
+    <!-- Reduce noise from Web3j and Hibernate -->
+    <logger name="org.web3j" level="WARN"/>
+    <logger name="org.hibernate.SQL" level="WARN"/>
+    <logger name="org.flywaydb" level="INFO"/>
+</configuration>
