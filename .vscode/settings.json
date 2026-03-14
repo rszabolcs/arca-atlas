@@ -11,6 +11,6 @@
         ".specify/scripts/powershell/": true
     },
     "java.compile.nullAnalysis.mode": "automatic",
-    "java.configuration.updateBuildConfiguration": "interactive"
+    "java.configuration.updateBuildConfiguration": "interactive",
+    "sarif-viewer.connectToGithubCodeScanning": "off"
 }
-
